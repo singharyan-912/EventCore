@@ -1,0 +1,5 @@
+CREATE TABLE schema_version_check (
+    id BIGSERIAL PRIMARY KEY,
+    version VARCHAR(50) NOT NULL,
+    installed_on TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
