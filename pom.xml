@@ -50,6 +50,13 @@
 			<artifactId>flyway-database-postgresql</artifactId>
 		</dependency>
 
+		<!-- Awaitility: async test assertions for retry worker -->
+		<dependency>
+			<groupId>org.awaitility</groupId>
+			<artifactId>awaitility</artifactId>
+			<scope>test</scope>
+		</dependency>
+
 		<!-- Testing Stack -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
