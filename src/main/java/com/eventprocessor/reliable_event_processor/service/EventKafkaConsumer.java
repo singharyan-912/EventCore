@@ -50,17 +50,20 @@ public class EventKafkaConsumer {
     private final ConsumerProperties consumerProperties;
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final ObjectMapper objectMapper;
+    private final EventMetricsService metricsService;
 
     public EventKafkaConsumer(EventProcessingService eventProcessingService,
                               ProcessedEventRepository processedEventRepository,
                               ConsumerProperties consumerProperties,
                               KafkaTemplate<String, String> kafkaTemplate,
-                              ObjectMapper objectMapper) {
+                              ObjectMapper objectMapper,
+                              EventMetricsService metricsService) {
         this.eventProcessingService = eventProcessingService;
         this.processedEventRepository = processedEventRepository;
         this.consumerProperties = consumerProperties;
         this.kafkaTemplate = kafkaTemplate;
         this.objectMapper = objectMapper;
+        this.metricsService = metricsService;
     }
 
     @KafkaListener(
@@ -83,16 +86,18 @@ public class EventKafkaConsumer {
         try {
             jsonNode = objectMapper.readTree(value);
         } catch (Exception ex) {
-            log.error("Malformed JSON at [topic={}, partition={}, offset={}]. Forwarding to DLT: {}",
+            log.error("Malformed JSON [topic={}, partition={}, offset={}]. Forwarding to DLT: {}",
                     topic, partition, offset, ex.getMessage());
+            metricsService.recordConsumerFailure(topic, "MALFORMED_JSON");
             forwardToDlt(record, "Malformed JSON: " + ex.getMessage());
             ack.acknowledge();
             return;
         }
 
         if (jsonNode == null || !jsonNode.isObject()) {
-            log.error("Invalid non-object JSON at [topic={}, partition={}, offset={}]. Forwarding to DLT",
+            log.error("Invalid non-object JSON [topic={}, partition={}, offset={}]. Forwarding to DLT",
                     topic, partition, offset);
+            metricsService.recordConsumerFailure(topic, "INVALID_STRUCTURE");
             forwardToDlt(record, "Invalid JSON structure (not an object)");
             ack.acknowledge();
             return;
@@ -100,8 +105,9 @@ public class EventKafkaConsumer {
 
         String idempotencyKey = extractText(jsonNode, "idempotencyKey");
         if (idempotencyKey == null || idempotencyKey.isBlank()) {
-            log.error("Message missing required 'idempotencyKey' at [topic={}, partition={}, offset={}]. Forwarding to DLT",
+            log.error("Message missing required 'idempotencyKey' [topic={}, partition={}, offset={}]. Forwarding to DLT",
                     topic, partition, offset);
+            metricsService.recordConsumerFailure(topic, "MISSING_IDEMPOTENCY_KEY");
             forwardToDlt(record, "Missing required field: idempotencyKey");
             ack.acknowledge();
             return;
@@ -125,23 +131,25 @@ public class EventKafkaConsumer {
             ProcessedEvent existing = existingOpt.get();
             String status = existing.getStatus();
 
+            metricsService.recordConsumerDuplicate(topic);
+
             if (EventStatus.PROCESSED.name().equals(status)) {
-                log.info("Duplicate delivery for event '{}' [status=PROCESSED]. Offset acknowledged without repeating business effects.",
+                log.info("Duplicate delivery for event [idempotency_key={}, status=PROCESSED]. Acknowledged without repeating business effects.",
                         idempotencyKey);
                 ack.acknowledge();
                 return;
             } else if (EventStatus.DEAD_LETTER.name().equals(status)) {
-                log.warn("Event '{}' is in DEAD_LETTER state (reason: {}). Offset acknowledged without repeating business effects.",
+                log.warn("Event [idempotency_key={}, status=DEAD_LETTER, reason={}]. Acknowledged without repeating business effects.",
                         idempotencyKey, existing.getLastFailureReason());
                 ack.acknowledge();
                 return;
             } else if (EventStatus.RETRY_PENDING.name().equals(status)) {
-                log.info("Event '{}' is already in RETRY_PENDING state (retryCount={}/{}). Offset acknowledged; scheduled retry worker is authoritative.",
+                log.info("Event [idempotency_key={}, status=RETRY_PENDING, attempts={}/{}]. Acknowledged; scheduled retry worker is authoritative.",
                         idempotencyKey, existing.getRetryCount(), existing.getMaxRetries());
                 ack.acknowledge();
                 return;
             } else if (EventStatus.PROCESSING.name().equals(status)) {
-                log.info("Event '{}' is currently PROCESSING by another worker. Offset acknowledged.", idempotencyKey);
+                log.info("Event [idempotency_key={}, status=PROCESSING]. Acknowledged.", idempotencyKey);
                 ack.acknowledge();
                 return;
             }
@@ -151,28 +159,33 @@ public class EventKafkaConsumer {
         EventRequest eventRequest = new EventRequest(idempotencyKey, eventType, resourceId, quantity);
         try {
             EventResponse response = eventProcessingService.processEvent(eventRequest);
-            log.info("Event '{}' processed asynchronously via Kafka [status={}, remainingQuantity={}]. Committing offset.",
+            metricsService.recordConsumerSuccess(topic);
+            log.info("Event processed asynchronously via Kafka [idempotency_key={}, status={}, remaining_quantity={}]. Committing offset.",
                     idempotencyKey, response.status(), response.remainingQuantity());
             // Event is either PROCESSED or RETRY_PENDING (durably saved in PostgreSQL)
             ack.acknowledge();
         } catch (InsufficientInventoryException ex) {
-            log.warn("Permanent business failure for event '{}' via Kafka: Insufficient inventory. Forwarding to DLT and committing offset.",
+            log.warn("Permanent business failure via Kafka [idempotency_key={}]: Insufficient inventory. Forwarding to DLT and committing offset.",
                     idempotencyKey);
+            metricsService.recordConsumerFailure(topic, "INSUFFICIENT_INVENTORY");
             forwardToDlt(record, "Insufficient inventory: " + ex.getMessage());
             ack.acknowledge();
         } catch (ResourceNotFoundException ex) {
-            log.warn("Permanent failure for event '{}' via Kafka: {}. Forwarding to DLT and committing offset.",
+            log.warn("Permanent failure via Kafka [idempotency_key={}]: {}. Forwarding to DLT and committing offset.",
                     idempotencyKey, ex.getMessage());
+            metricsService.recordConsumerFailure(topic, "RESOURCE_NOT_FOUND");
             forwardToDlt(record, "Resource not found: " + ex.getMessage());
             ack.acknowledge();
         } catch (IdempotencyConflictException ex) {
-            log.warn("Idempotency conflict for event '{}' via Kafka: {}. Forwarding to DLT and committing offset.",
+            log.warn("Idempotency conflict via Kafka [idempotency_key={}]: {}. Forwarding to DLT and committing offset.",
                     idempotencyKey, ex.getMessage());
+            metricsService.recordConsumerFailure(topic, "IDEMPOTENCY_CONFLICT");
             forwardToDlt(record, "Idempotency conflict: " + ex.getMessage());
             ack.acknowledge();
         } catch (Exception ex) {
-            log.error("Infrastructure/database failure for event '{}' [topic={}, partition={}, offset={}]: {}. Offset will NOT be committed.",
+            log.error("Infrastructure/database failure [idempotency_key={}, topic={}, partition={}, offset={}]: {}. Offset will NOT be committed.",
                     idempotencyKey, topic, partition, offset, ex.getMessage(), ex);
+            metricsService.recordConsumerFailure(topic, "INFRASTRUCTURE_FAILURE");
             throw ex; // Triggers container retry until database/infrastructure recovers
         }
     }

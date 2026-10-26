@@ -19,9 +19,17 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, Long> 
 
     List<OutboxEvent> findAllByIdempotencyKey(String idempotencyKey);
 
+    List<OutboxEvent> findByIdempotencyKeyIn(java.util.Collection<String> idempotencyKeys);
+
     Page<OutboxEvent> findByStatus(String status, Pageable pageable);
 
     long countByStatus(String status);
+
+    @Query("SELECT o.status, COUNT(o) FROM OutboxEvent o GROUP BY o.status")
+    List<Object[]> countGroupedByStatus();
+
+    @Query("SELECT COUNT(o) FROM OutboxEvent o WHERE o.retryCount > 0")
+    long countRetriedOutboxEvents();
 
     /**
      * Atomically locks and returns pending or stale-claimed outbox events using SKIP LOCKED.

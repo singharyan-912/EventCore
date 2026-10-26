@@ -56,6 +56,12 @@
 			<artifactId>spring-kafka</artifactId>
 		</dependency>
 
+		<!-- Actuator & Micrometer: Phase 6 Observability and Operations -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-actuator</artifactId>
+		</dependency>
+
 		<!-- Awaitility: async test assertions for retry worker -->
 		<dependency>
 			<groupId>org.awaitility</groupId>

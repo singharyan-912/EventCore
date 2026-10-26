@@ -27,15 +27,18 @@ public class OutboxPublisherService {
     private final OutboxProperties outboxProperties;
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final ObjectMapper objectMapper;
+    private final EventMetricsService metricsService;
 
     public OutboxPublisherService(OutboxEventRepository outboxEventRepository,
                                   OutboxProperties outboxProperties,
                                   KafkaTemplate<String, String> kafkaTemplate,
-                                  ObjectMapper objectMapper) {
+                                  ObjectMapper objectMapper,
+                                  EventMetricsService metricsService) {
         this.outboxEventRepository = outboxEventRepository;
         this.outboxProperties = outboxProperties;
         this.kafkaTemplate = kafkaTemplate;
         this.objectMapper = objectMapper;
+        this.metricsService = metricsService;
     }
 
     /**
@@ -98,7 +101,10 @@ public class OutboxPublisherService {
             event.setPublishedAt(now);
             event.setUpdatedAt(now);
             outboxEventRepository.save(event);
-            log.info("Outbox event #{} marked as PUBLISHED", eventId);
+
+            metricsService.recordOutboxSuccess(event.getTopic());
+            log.info("Outbox event marked as PUBLISHED [outbox_id={}, idempotency_key={}, topic={}]",
+                    eventId, event.getIdempotencyKey(), event.getTopic());
         });
     }
 
@@ -114,14 +120,16 @@ public class OutboxPublisherService {
             event.setLastError(ex.getMessage());
             event.setUpdatedAt(OffsetDateTime.now());
 
+            metricsService.recordOutboxFailure(event.getTopic());
+
             if (newRetryCount >= event.getMaxRetries()) {
                 event.setStatus(OutboxStatus.FAILED.name());
-                log.error("Outbox event #{} exceeded max retries ({}), marked as FAILED. Error: {}",
-                        eventId, event.getMaxRetries(), ex.getMessage());
+                log.error("Outbox event exceeded max retries [outbox_id={}, idempotency_key={}, topic={}, attempts={}/{}], marked as FAILED: {}",
+                        eventId, event.getIdempotencyKey(), event.getTopic(), newRetryCount, event.getMaxRetries(), ex.getMessage());
             } else {
                 event.setStatus(OutboxStatus.PENDING.name());
-                log.warn("Outbox event #{} send failed (attempt {}/{}), rescheduled for next poll. Error: {}",
-                        eventId, newRetryCount, event.getMaxRetries(), ex.getMessage());
+                log.warn("Outbox publication failed [outbox_id={}, idempotency_key={}, topic={}, attempts={}/{}], rescheduled: {}",
+                        eventId, event.getIdempotencyKey(), event.getTopic(), newRetryCount, event.getMaxRetries(), ex.getMessage());
             }
             outboxEventRepository.save(event);
         });

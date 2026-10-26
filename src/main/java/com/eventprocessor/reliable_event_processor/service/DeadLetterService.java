@@ -29,15 +29,18 @@ public class DeadLetterService {
     private final RetryExecutionService retryExecutionService;
     private final AdminSecurityProperties adminSecurityProperties;
     private final RetryProperties retryProperties;
+    private final OperationalAuditService auditService;
 
     public DeadLetterService(ProcessedEventRepository processedEventRepository,
                              RetryExecutionService retryExecutionService,
                              AdminSecurityProperties adminSecurityProperties,
-                             RetryProperties retryProperties) {
+                             RetryProperties retryProperties,
+                             OperationalAuditService auditService) {
         this.processedEventRepository = processedEventRepository;
         this.retryExecutionService = retryExecutionService;
         this.adminSecurityProperties = adminSecurityProperties;
         this.retryProperties = retryProperties;
+        this.auditService = auditService;
     }
 
     public void validateApiKey(String apiKey) {
@@ -75,25 +78,57 @@ public class DeadLetterService {
      */
     @Transactional
     public DeadLetterResponse requestReprocessing(String idempotencyKey) {
-        ProcessedEvent event = processedEventRepository
-                .findByIdempotencyKeyForUpdate(idempotencyKey)
-                .orElseThrow(() -> new ResourceNotFoundException("Event not found: " + idempotencyKey));
+        return requestReprocessing(idempotencyKey, "SYSTEM");
+    }
 
-        if (!EventStatus.DEAD_LETTER.name().equals(event.getStatus())) {
-            throw new InvalidStateTransitionException(
-                    "Only DEAD_LETTER events can be reprocessed. Current status: " + event.getStatus());
+    /**
+     * Schedules a DEAD_LETTER event for immediate reprocessing by resetting it to RETRY_PENDING.
+     * Does NOT directly re-run business logic — that is the worker's responsibility.
+     * Does NOT undo or reset any previously successful inventory deduction.
+     * Records an operational audit log for administrative tracing.
+     */
+    @Transactional
+    public DeadLetterResponse requestReprocessing(String idempotencyKey, String principal) {
+        try {
+            ProcessedEvent event = processedEventRepository
+                    .findByIdempotencyKeyForUpdate(idempotencyKey)
+                    .orElseThrow(() -> new ResourceNotFoundException("Event not found: " + idempotencyKey));
+
+            if (!EventStatus.DEAD_LETTER.name().equals(event.getStatus())) {
+                throw new InvalidStateTransitionException(
+                        "Only DEAD_LETTER events can be reprocessed. Current status: " + event.getStatus());
+            }
+
+            // Reset for one more attempt cycle — preserve original idempotency key and payload
+            event.setStatus(EventStatus.RETRY_PENDING.name());
+            event.setRetryCount(0);
+            event.setMaxRetries(retryProperties.getMaxAttempts());
+            event.setNextRetryAt(OffsetDateTime.now()); // immediately eligible
+            event.setLastFailureReason("Manually queued for reprocessing by operator");
+            processedEventRepository.save(event);
+
+            auditService.recordAuditLog(
+                    "DEAD_LETTER_REPROCESS",
+                    idempotencyKey,
+                    "SUCCESS",
+                    null,
+                    principal,
+                    "Event reset to RETRY_PENDING with immediate schedule"
+            );
+
+            log.info("Event {} manually queued for reprocessing from DEAD_LETTER by principal '{}'", idempotencyKey, principal);
+            return toDeadLetterResponse(event);
+        } catch (Exception ex) {
+            auditService.recordAuditLog(
+                    "DEAD_LETTER_REPROCESS",
+                    idempotencyKey,
+                    "FAILED",
+                    ex.getMessage(),
+                    principal,
+                    "Reprocessing request rejected"
+            );
+            throw ex;
         }
-
-        // Reset for one more attempt cycle — preserve original idempotency key and payload
-        event.setStatus(EventStatus.RETRY_PENDING.name());
-        event.setRetryCount(0);
-        event.setMaxRetries(retryProperties.getMaxAttempts());
-        event.setNextRetryAt(OffsetDateTime.now()); // immediately eligible
-        event.setLastFailureReason("Manually queued for reprocessing by operator");
-        processedEventRepository.save(event);
-
-        log.info("Event {} manually queued for reprocessing from DEAD_LETTER", idempotencyKey);
-        return toDeadLetterResponse(event);
     }
 
     private DeadLetterResponse toDeadLetterResponse(ProcessedEvent event) {

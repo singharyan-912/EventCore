@@ -5,6 +5,8 @@ import com.eventprocessor.reliable_event_processor.dto.EventResponse;
 import com.eventprocessor.reliable_event_processor.entity.EventStatus;
 import com.eventprocessor.reliable_event_processor.entity.ProcessedEvent;
 import com.eventprocessor.reliable_event_processor.exception.IdempotencyConflictException;
+import com.eventprocessor.reliable_event_processor.exception.InsufficientInventoryException;
+import com.eventprocessor.reliable_event_processor.exception.ResourceNotFoundException;
 import com.eventprocessor.reliable_event_processor.exception.TransientProcessingException;
 import com.eventprocessor.reliable_event_processor.repository.ProcessedEventRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -43,17 +45,20 @@ public class ReliabilityEngine {
     private final TransactionTemplate transactionTemplate;
     private final RetryProperties retryProperties;
     private final OutboxService outboxService;
+    private final EventMetricsService metricsService;
 
     public ReliabilityEngine(ProcessedEventRepository processedEventRepository,
                              ObjectMapper objectMapper,
                              PlatformTransactionManager transactionManager,
                              RetryProperties retryProperties,
-                             OutboxService outboxService) {
+                             OutboxService outboxService,
+                             EventMetricsService metricsService) {
         this.processedEventRepository = processedEventRepository;
         this.objectMapper = objectMapper;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
         this.retryProperties = retryProperties;
         this.outboxService = outboxService;
+        this.metricsService = metricsService;
     }
 
     /**
@@ -77,9 +82,12 @@ public class ReliabilityEngine {
             return handleExistingEvent(existingEvent.get(), payloadHash, responseType, replayTransformer);
         }
 
+        Instant startTime = Instant.now();
+        metricsService.recordEventAttempt(eventType);
+
         try {
             // Execute business mutation and event recording inside an atomic transaction
-            return transactionTemplate.execute(status -> {
+            R result = transactionTemplate.execute(status -> {
                 // Double-check inside transaction boundary
                 Optional<ProcessedEvent> inTxExisting = processedEventRepository.findByIdempotencyKey(idempotencyKey);
                 if (inTxExisting.isPresent()) {
@@ -87,7 +95,6 @@ public class ReliabilityEngine {
                 }
 
                 // Execute the business operation (e.g., deduct inventory)
-                // If this throws a permanent exception (e.g. InsufficientInventory), transaction rolls back automatically
                 R response = businessOperation.get();
 
                 String serializedResponse;
@@ -122,15 +129,37 @@ public class ReliabilityEngine {
 
                 return response;
             });
+
+            metricsService.recordEventSuccess(eventType, Duration.between(startTime, Instant.now()));
+            return result;
         } catch (TransientProcessingException ex) {
-            log.warn("Transient processing failure for idempotency key '{}': {}", idempotencyKey, ex.getMessage());
+            log.warn("Transient processing failure [event_type={}, idempotency_key={}, resource_id={}]: {}",
+                    eventType, idempotencyKey, resourceId, ex.getMessage());
+            metricsService.recordEventFailure(eventType, "TRANSIENT_FAILURE", Duration.between(startTime, Instant.now()));
             return recordTransientFailure(idempotencyKey, eventType, resourceId, payloadHash, rawPayloadJson, ex);
+        } catch (InsufficientInventoryException ex) {
+            log.warn("Permanent failure - Insufficient inventory [event_type={}, idempotency_key={}, resource_id={}]: {}",
+                    eventType, idempotencyKey, resourceId, ex.getMessage());
+            metricsService.recordEventFailure(eventType, "INSUFFICIENT_INVENTORY", Duration.between(startTime, Instant.now()));
+            throw ex;
+        } catch (ResourceNotFoundException ex) {
+            log.warn("Permanent failure - Resource not found [event_type={}, idempotency_key={}, resource_id={}]: {}",
+                    eventType, idempotencyKey, resourceId, ex.getMessage());
+            metricsService.recordEventFailure(eventType, "RESOURCE_NOT_FOUND", Duration.between(startTime, Instant.now()));
+            throw ex;
         } catch (DataIntegrityViolationException ex) {
             // Handled concurrency race: another thread committed the same idempotencyKey concurrently
-            log.info("Detected concurrent duplicate submission for idempotency key: {}", idempotencyKey);
+            log.info("Detected concurrent duplicate submission [event_type={}, idempotency_key={}]: {}",
+                    eventType, idempotencyKey, ex.getMessage());
+            metricsService.recordEventDuplicate(eventType, "CONCURRENT_DUPLICATE");
             ProcessedEvent winnerEvent = processedEventRepository.findByIdempotencyKey(idempotencyKey)
                     .orElseThrow(() -> ex);
             return handleExistingEvent(winnerEvent, payloadHash, responseType, replayTransformer);
+        } catch (Exception ex) {
+            log.error("Unhandled processing error [event_type={}, idempotency_key={}, resource_id={}]: {}",
+                    eventType, idempotencyKey, resourceId, ex.getMessage(), ex);
+            metricsService.recordEventFailure(eventType, "UNEXPECTED_ERROR", Duration.between(startTime, Instant.now()));
+            throw ex;
         }
     }
 
@@ -181,11 +210,15 @@ public class ReliabilityEngine {
                                       UnaryOperator<R> replayTransformer) {
         // Case C: Same key, different payload -> 409 Conflict
         if (!event.getRequestPayloadHash().equals(currentPayloadHash)) {
+            metricsService.recordEventFailure(event.getEventType(), "IDEMPOTENCY_CONFLICT", null);
             throw new IdempotencyConflictException(
                     "Idempotency key '%s' has already been used with a different request payload"
                             .formatted(event.getIdempotencyKey())
             );
         }
+
+        // Record duplicate/idempotent replay — DOES NOT increment success counter!
+        metricsService.recordEventDuplicate(event.getEventType(), event.getStatus());
 
         // Case B: Same key, same payload -> Check status
         if (EventStatus.PROCESSED.name().equals(event.getStatus())) {

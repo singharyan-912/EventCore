@@ -32,19 +32,22 @@ public class RetryExecutionService {
     private final RetryProperties retryProperties;
     private final TransientFailureSimulator failureSimulator;
     private final OutboxService outboxService;
+    private final EventMetricsService metricsService;
 
     public RetryExecutionService(ProcessedEventRepository processedEventRepository,
                                   InventoryService inventoryService,
                                   ObjectMapper objectMapper,
                                   RetryProperties retryProperties,
                                   TransientFailureSimulator failureSimulator,
-                                  OutboxService outboxService) {
+                                  OutboxService outboxService,
+                                  EventMetricsService metricsService) {
         this.processedEventRepository = processedEventRepository;
         this.inventoryService = inventoryService;
         this.objectMapper = objectMapper;
         this.retryProperties = retryProperties;
         this.failureSimulator = failureSimulator;
         this.outboxService = outboxService;
+        this.metricsService = metricsService;
     }
 
     /**
@@ -86,17 +89,20 @@ public class RetryExecutionService {
         locked.setLastAttemptAt(OffsetDateTime.now());
         processedEventRepository.save(locked);
 
+        metricsService.recordRetryAttempt(locked.getEventType());
+
         try {
             executeBusinessOperation(locked);
         } catch (InsufficientInventoryException | ResourceNotFoundException permanentEx) {
             // Permanent business failure — do NOT retry; move to DEAD_LETTER immediately
-            log.warn("Permanent business failure for event {}: {}", locked.getIdempotencyKey(), permanentEx.getMessage());
-            markDeadLetter(locked, "Permanent failure (will not retry): " + permanentEx.getMessage());
+            log.warn("Permanent business failure [event_type={}, idempotency_key={}]: {}",
+                    locked.getEventType(), locked.getIdempotencyKey(), permanentEx.getMessage());
+            markDeadLetter(locked, "Permanent failure (will not retry): " + permanentEx.getMessage(), "PERMANENT_FAILURE");
         } catch (RuntimeException transientEx) {
             // Transient failure (including TransientProcessingException) —
             // schedule retry or move to DEAD_LETTER if exhausted
-            log.warn("Transient failure on attempt {} for event {}: {}",
-                    locked.getRetryCount() + 1, locked.getIdempotencyKey(), transientEx.getMessage());
+            log.warn("Transient failure [event_type={}, idempotency_key={}, attempt={}/{}]: {}",
+                    locked.getEventType(), locked.getIdempotencyKey(), locked.getRetryCount() + 1, locked.getMaxRetries(), transientEx.getMessage());
             scheduleRetryOrDeadLetter(locked, transientEx.getMessage());
         }
     }
@@ -139,7 +145,8 @@ public class RetryExecutionService {
                 event.getResponsePayload()
         );
 
-        log.info("Retry succeeded for event {} (attempt {})", event.getIdempotencyKey(), event.getRetryCount());
+        log.info("Retry succeeded [event_type={}, idempotency_key={}, attempt={}]",
+                event.getEventType(), event.getIdempotencyKey(), event.getRetryCount());
     }
 
     private void scheduleRetryOrDeadLetter(ProcessedEvent event, String failureReason) {
@@ -148,22 +155,30 @@ public class RetryExecutionService {
         event.setLastFailureReason(failureReason);
 
         if (newCount >= event.getMaxRetries()) {
-            markDeadLetter(event, "Max retries (" + event.getMaxRetries() + ") exhausted. Last error: " + failureReason);
+            markDeadLetter(event, "Max retries (" + event.getMaxRetries() + ") exhausted. Last error: " + failureReason, "MAX_RETRIES_EXHAUSTED");
         } else {
             java.time.Duration backoff = retryProperties.calculateBackoff(newCount + 1);
             event.setNextRetryAt(OffsetDateTime.now().plus(backoff));
             event.setStatus(EventStatus.RETRY_PENDING.name());
             processedEventRepository.save(event);
-            log.info("Event {} scheduled for retry #{} at {}", event.getIdempotencyKey(), newCount + 1, event.getNextRetryAt());
+            log.info("Retry scheduled [event_type={}, idempotency_key={}, attempt={}/{}, next_retry_at={}]",
+                    event.getEventType(), event.getIdempotencyKey(), newCount + 1, event.getMaxRetries(), event.getNextRetryAt());
         }
     }
 
     private void markDeadLetter(ProcessedEvent event, String reason) {
+        markDeadLetter(event, reason, "EXHAUSTED");
+    }
+
+    private void markDeadLetter(ProcessedEvent event, String reason, String reasonCategory) {
         event.setStatus(EventStatus.DEAD_LETTER.name());
         event.setLastFailureReason(reason);
         event.setNextRetryAt(null);
         processedEventRepository.save(event);
-        log.warn("Event {} moved to DEAD_LETTER: {}", event.getIdempotencyKey(), reason);
+
+        metricsService.recordDeadLetter(event.getEventType(), reasonCategory);
+        log.warn("Event moved to DEAD_LETTER [event_type={}, idempotency_key={}, reason_category={}, reason={}]: {}",
+                event.getEventType(), event.getIdempotencyKey(), reasonCategory, reason, reason);
     }
 
     private int extractQuantityFromPayload(ProcessedEvent event) {

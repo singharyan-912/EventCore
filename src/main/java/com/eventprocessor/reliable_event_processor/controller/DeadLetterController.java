@@ -64,6 +64,6 @@ public class DeadLetterController {
             @RequestHeader("X-Admin-API-Key") String apiKey,
             @PathVariable String idempotencyKey) {
         deadLetterService.validateApiKey(apiKey);
-        return ResponseEntity.ok(deadLetterService.requestReprocessing(idempotencyKey));
+        return ResponseEntity.ok(deadLetterService.requestReprocessing(idempotencyKey, "admin-api-key"));
     }
 }
