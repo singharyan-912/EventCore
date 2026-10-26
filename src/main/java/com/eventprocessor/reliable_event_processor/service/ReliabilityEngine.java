@@ -42,15 +42,18 @@ public class ReliabilityEngine {
     private final ObjectMapper objectMapper;
     private final TransactionTemplate transactionTemplate;
     private final RetryProperties retryProperties;
+    private final OutboxService outboxService;
 
     public ReliabilityEngine(ProcessedEventRepository processedEventRepository,
                              ObjectMapper objectMapper,
                              PlatformTransactionManager transactionManager,
-                             RetryProperties retryProperties) {
+                             RetryProperties retryProperties,
+                             OutboxService outboxService) {
         this.processedEventRepository = processedEventRepository;
         this.objectMapper = objectMapper;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
         this.retryProperties = retryProperties;
+        this.outboxService = outboxService;
     }
 
     /**
@@ -108,6 +111,14 @@ public class ReliabilityEngine {
                 event.setMaxRetries(retryProperties.getMaxAttempts());
                 event.setLastAttemptAt(OffsetDateTime.now());
                 processedEventRepository.saveAndFlush(event);
+
+                // Persist outbox record atomically in the same database transaction
+                outboxService.recordOutboxEvent(
+                        idempotencyKey,
+                        eventType,
+                        resourceId,
+                        serializedResponse
+                );
 
                 return response;
             });

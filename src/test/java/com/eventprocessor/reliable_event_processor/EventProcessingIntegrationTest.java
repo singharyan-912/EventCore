@@ -25,8 +25,14 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import org.springframework.test.context.TestPropertySource;
+
 @SpringBootTest
 @AutoConfigureMockMvc
+@TestPropertySource(properties = {
+        "event-processor.outbox.enabled=false",
+        "event-processor.consumer.enabled=false"
+})
 class EventProcessingIntegrationTest {
 
     @Autowired

@@ -31,17 +31,20 @@ public class RetryExecutionService {
     private final ObjectMapper objectMapper;
     private final RetryProperties retryProperties;
     private final TransientFailureSimulator failureSimulator;
+    private final OutboxService outboxService;
 
     public RetryExecutionService(ProcessedEventRepository processedEventRepository,
                                   InventoryService inventoryService,
                                   ObjectMapper objectMapper,
                                   RetryProperties retryProperties,
-                                  TransientFailureSimulator failureSimulator) {
+                                  TransientFailureSimulator failureSimulator,
+                                  OutboxService outboxService) {
         this.processedEventRepository = processedEventRepository;
         this.inventoryService = inventoryService;
         this.objectMapper = objectMapper;
         this.retryProperties = retryProperties;
         this.failureSimulator = failureSimulator;
+        this.outboxService = outboxService;
     }
 
     /**
@@ -127,6 +130,14 @@ public class RetryExecutionService {
         event.setLastFailureReason(null);
         event.setNextRetryAt(null);
         processedEventRepository.save(event);
+
+        // Record in outbox in the same transaction
+        outboxService.recordOutboxEvent(
+                event.getIdempotencyKey(),
+                event.getEventType(),
+                event.getResourceId(),
+                event.getResponsePayload()
+        );
 
         log.info("Retry succeeded for event {} (attempt {})", event.getIdempotencyKey(), event.getRetryCount());
     }

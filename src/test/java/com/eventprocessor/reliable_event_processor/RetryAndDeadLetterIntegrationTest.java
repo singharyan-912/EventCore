@@ -54,7 +54,9 @@ import java.util.concurrent.TimeUnit;
         "event-processor.retry.multiplier=2.0",
         "event-processor.retry.max-attempts=3",
         "event-processor.worker.poll-interval-ms=200",    // rapid polling
-        "event-processor.worker.batch-size=10"
+        "event-processor.worker.batch-size=10",
+        "event-processor.outbox.enabled=false",
+        "event-processor.consumer.enabled=false"
 })
 class RetryAndDeadLetterIntegrationTest {
 
