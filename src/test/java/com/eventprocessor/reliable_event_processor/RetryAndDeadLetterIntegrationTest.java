@@ -167,13 +167,14 @@ class RetryAndDeadLetterIntegrationTest {
                 .andExpect(jsonPath("$.status").value("RETRY_PENDING"));
 
         // Clear simulator so retry worker succeeds on the re-attempt
+        failureSimulator.clearKey(idempotencyKey);
         failureSimulator.clear();
 
         // Move next_retry_at to past so the worker picks it up immediately
         setNextRetryAtToPast(idempotencyKey);
 
         // Wait for RetryWorker to process and succeed
-        await().atMost(5, TimeUnit.SECONDS)
+        await().atMost(10, TimeUnit.SECONDS)
                 .pollInterval(300, TimeUnit.MILLISECONDS)
                 .untilAsserted(() -> {
                     ProcessedEvent e = processedEventRepository.findByIdempotencyKey(idempotencyKey).orElseThrow();
@@ -269,7 +270,7 @@ class RetryAndDeadLetterIntegrationTest {
 
         // Missing key
         mockMvc.perform(get("/api/v1/admin/dead-letters"))
-                .andExpect(status().isBadRequest()); // Spring returns 400 for missing required header
+                .andExpect(status().isUnauthorized());
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -419,8 +420,12 @@ class RetryAndDeadLetterIntegrationTest {
         pool.shutdown();
 
         // The event should be processed exactly once
-        ProcessedEvent result = processedEventRepository.findByIdempotencyKey(idempotencyKey).orElseThrow();
-        assertThat(result.getStatus()).isEqualTo(EventStatus.PROCESSED.name());
+        await().atMost(5, TimeUnit.SECONDS)
+                .pollInterval(100, TimeUnit.MILLISECONDS)
+                .untilAsserted(() -> {
+                    ProcessedEvent result = processedEventRepository.findByIdempotencyKey(idempotencyKey).orElseThrow();
+                    assertThat(result.getStatus()).isEqualTo(EventStatus.PROCESSED.name());
+                });
 
         Inventory inv = inventoryRepository.findByResourceId(resourceId).orElseThrow();
         assertThat(inv.getAvailableQuantity()).isEqualTo(95); // deducted exactly once

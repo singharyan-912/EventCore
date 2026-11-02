@@ -15,8 +15,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class TransientFailureSimulator {
 
     private final SimulationProperties simulationProperties;
-    private final ConcurrentHashMap<String, AtomicInteger> failureCounters = new ConcurrentHashMap<>();
-    private final java.util.Set<String> clearedKeys = ConcurrentHashMap.newKeySet();
+    private static final ConcurrentHashMap<String, AtomicInteger> failureCounters = new ConcurrentHashMap<>();
+    private static final java.util.Set<String> clearedKeys = ConcurrentHashMap.newKeySet();
 
     public TransientFailureSimulator(SimulationProperties simulationProperties) {
         this.simulationProperties = simulationProperties;
@@ -43,6 +43,11 @@ public class TransientFailureSimulator {
                 );
             }
         }
+    }
+
+    public void clearKey(String idempotencyKey) {
+        clearedKeys.add(idempotencyKey);
+        failureCounters.remove(idempotencyKey);
     }
 
     public void clear() {

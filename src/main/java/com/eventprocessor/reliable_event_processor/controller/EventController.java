@@ -4,6 +4,8 @@ import com.eventprocessor.reliable_event_processor.dto.EventRequest;
 import com.eventprocessor.reliable_event_processor.dto.EventResponse;
 import com.eventprocessor.reliable_event_processor.entity.EventStatus;
 import com.eventprocessor.reliable_event_processor.service.EventProcessingService;
+import com.eventprocessor.reliable_event_processor.security.IngestionRateLimiter;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -17,17 +19,37 @@ import org.springframework.web.bind.annotation.RestController;
 public class EventController {
 
     private final EventProcessingService eventProcessingService;
+    private final IngestionRateLimiter ingestionRateLimiter;
 
-    public EventController(EventProcessingService eventProcessingService) {
+    public EventController(EventProcessingService eventProcessingService,
+                           IngestionRateLimiter ingestionRateLimiter) {
         this.eventProcessingService = eventProcessingService;
+        this.ingestionRateLimiter = ingestionRateLimiter;
     }
 
     @PostMapping
-    public ResponseEntity<EventResponse> processEvent(@Valid @RequestBody EventRequest request) {
+    public ResponseEntity<EventResponse> processEvent(@Valid @RequestBody EventRequest request,
+                                                      HttpServletRequest httpRequest) {
+        String clientIp = extractClientIp(httpRequest);
+        if (!ingestionRateLimiter.allowRequest(clientIp)) {
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).build();
+        }
+
         EventResponse response = eventProcessingService.processEvent(request);
         if (EventStatus.RETRY_PENDING.name().equals(response.status())) {
             return ResponseEntity.status(HttpStatus.ACCEPTED).body(response);
         }
         return ResponseEntity.ok(response);
+    }
+
+    private String extractClientIp(HttpServletRequest request) {
+        if (request == null) {
+            return "127.0.0.1";
+        }
+        String forwarded = request.getHeader("X-Forwarded-For");
+        if (forwarded != null && !forwarded.isBlank()) {
+            return forwarded.split(",")[0].trim();
+        }
+        return request.getRemoteAddr();
     }
 }

@@ -1,6 +1,6 @@
 # Reliable Event Processing Platform
 
-A resilient, transactional, and observable event-processing platform built with **Java 21**, **Spring Boot 3.4.3**, **PostgreSQL**, **Flyway**, and **Apache Kafka**.
+A resilient, transactional, observable, and secured event-processing platform built with **Java 21**, **Spring Boot 3.4.3**, **PostgreSQL**, **Flyway**, and **Apache Kafka**.
 
 ---
 
@@ -14,282 +14,262 @@ The platform guarantees effectively-once business effect delivery across asynchr
 4. **Kafka Ingestion & Consumer**: `EventKafkaConsumer` consumes from `inventory-events` using `MANUAL_IMMEDIATE` acknowledgment mode. It verifies authoritative state in PostgreSQL, ensuring duplicate message deliveries are safely acknowledged without repeated deductions.
 5. **Retry Mechanism & Backoff**: Handles transient failures via scheduled `RetryWorker` using exponential backoff with jitter and `FOR UPDATE SKIP LOCKED`.
 6. **Dead-Letter Handling & Reprocessing**: Events exceeding maximum retry attempts transition to `DEAD_LETTER`. Operators can inspect and trigger administrative reprocessing via secured endpoints.
-7. **Phase 6 Observability & Operations**:
+7. **Observability & Operations**:
    - **Micrometer & Spring Boot Actuator**: Bounded metrics for attempts, successes, failures, replays, retries, dead-letters, outbox publications, and consumer deliveries.
    - **Health Indicators**: Real-time bounded checks for application, PostgreSQL (`DataSourceHealthIndicator`), Kafka broker reachability (`KafkaHealthIndicator`), Outbox status (`OutboxHealthIndicator`), and Retry worker queue (`RetryWorkerHealthIndicator`).
    - **Operations REST API (`/api/v1/operations/**`)**: Paginated event inspection with multi-dimensional filtering, event details with correlated outbox status, database-backed summary counts, and unified metric reporting.
    - **Operational Audit Log (`operational_audit_logs`)**: Persists an immutable audit trail for operator actions (such as dead-letter reprocessing) with principal, outcome, and failure details in dedicated transactions (`REQUIRES_NEW`).
+8. **Phase 7 Authentication, RBAC & Security Hardening**:
+   - **Stateless JWT Authentication**: Secure HMAC-SHA256 tokens signed with rotating/environment secrets, validated per request without server-side session state.
+   - **Role-Based Access Control (RBAC)**: Fine-grained method and URL-level authorization enforcing `ADMIN`, `OPERATOR`, and `VIEWER` roles.
+   - **Dual Authentication Support**: Accommodates standard `Authorization: Bearer <jwt>` alongside backward-compatible `X-Admin-API-Key` headers.
+   - **Password Security**: Passwords hashed using industry-standard `BCryptPasswordEncoder`. Plaintext passwords and hashes are never returned in responses or logs.
+   - **Lockout & Timing Attack Protections**: Constant-time dummy password checks prevent user enumeration. The platform prevents demoting or deactivating the last active administrator.
+   - **Abuse Protections & Rate Limiting**: In-memory token-bucket rate limiters guard event ingestion and login endpoints against brute-force abuse.
+   - **Automated Security Audit Trail**: Captures security-sensitive lifecycle actions (login success/failure, user creation, role changes, deactivations, access denials).
+
+---
+
+## Role-Based Access Control (RBAC) Matrix
+
+| Endpoint / Capability | Public | VIEWER | OPERATOR | ADMIN | Legacy API Key |
+|-----------------------|:------:|:------:|:--------:|:-----:|:--------------:|
+| `GET /api/v1/health` (Liveness / Readiness) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `POST /api/v1/events` (Ingestion) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `POST /api/v1/auth/login` | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `GET /actuator/health`, `/info`, `/metrics` | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `GET /api/v1/auth/me` (Current Profile) | ❌ | ✅ | ✅ | ✅ | ❌ |
+| `POST /api/v1/auth/logout` | ❌ | ✅ | ✅ | ✅ | ❌ |
+| `GET /api/v1/operations/events/**` (Event Search & Detail) | ❌ | ✅ | ✅ | ✅ | ✅ |
+| `GET /api/v1/operations/events/summary` | ❌ | ✅ | ✅ | ✅ | ✅ |
+| `GET /api/v1/operations/outbox/summary` | ❌ | ✅ | ✅ | ✅ | ✅ |
+| `GET /api/v1/operations/metrics` (Unified Reporting) | ❌ | ✅ | ✅ | ✅ | ✅ |
+| `GET /api/v1/admin/dead-letters/**` (Inspection) | ❌ | ❌ | ✅ | ✅ | ✅ |
+| `POST /api/v1/admin/dead-letters/*/reprocess` | ❌ | ❌ | ✅ | ✅ | ✅ |
+| `GET /api/v1/operations/audit-logs/**` (Security Audit) | ❌ | ❌ | ❌ | ✅ | ✅ |
+| `POST /api/v1/admin/users` (Create Users) | ❌ | ❌ | ❌ | ✅ | ❌ |
+| `GET /api/v1/admin/users` (List Users) | ❌ | ❌ | ❌ | ✅ | ❌ |
+| `PATCH /api/v1/admin/users/{id}/role` | ❌ | ❌ | ❌ | ✅ | ❌ |
+| `PATCH /api/v1/admin/users/{id}/status` | ❌ | ❌ | ❌ | ✅ | ❌ |
 
 ---
 
 ## Required Configuration & Environment Variables
 
-| Variable / Property | Description | Default / Example |
-|---------------------|-------------|-------------------|
-| `DB_PASSWORD` | PostgreSQL password for HikariCP & Flyway | `${DB_PASSWORD}` |
-| `spring.datasource.url` | JDBC connection string | `jdbc:postgresql://localhost:5432/event_processor` |
-| `spring.datasource.username` | PostgreSQL username | `postgres` |
-| `spring.kafka.bootstrap-servers` | Kafka bootstrap address | `localhost:9092` |
-| `event-processor.admin.api-key` | Secret key for administrative endpoints | `admin-secret-key-12345` |
-| `event-processor.outbox.enabled` | Enable/disable transactional outbox publisher | `true` |
-| `event-processor.outbox.poll-interval-ms` | Outbox batch polling interval | `2000` |
-| `event-processor.consumer.enabled` | Enable/disable Kafka consumer listener | `true` |
-| `event-processor.worker.enabled` | Enable/disable background retry worker | `true` |
-| `event-processor.worker.poll-interval-ms` | Retry worker batch polling interval | `2000` |
-| `management.endpoints.web.exposure.include` | Actuator exposed endpoints | `health,metrics,info` |
+| Variable / Property | Description | Default / Example | Production Requirement |
+|---------------------|-------------|-------------------|------------------------|
+| `DB_PASSWORD` | PostgreSQL password for HikariCP & Flyway | `${DB_PASSWORD}` | **Required** |
+| `JWT_SECRET` | Secret key for HMAC-SHA256 JWT signing | Ephemeral auto-key in dev | **Required in Production** (>= 256 bits) |
+| `BOOTSTRAP_ADMIN_PASSWORD` | Initial password for the bootstrapped `admin` user | `AdminSecret123!` (dev only) | **Required in Production** |
+| `BOOTSTRAP_ADMIN_USERNAME` | Initial admin username | `admin` | Optional |
+| `BOOTSTRAP_ADMIN_EMAIL` | Initial admin email address | `admin@eventprocessor.local` | Optional |
+| `event-processor.security.jwt.expiration-ms` | Access token lifespan in milliseconds | `3600000` (1 hour) | Configurable |
+| `event-processor.admin.api-key` | Secret key for legacy administrative header | `admin-secret-key-12345` | Configurable |
+| `spring.datasource.url` | JDBC connection string | `jdbc:postgresql://localhost:5432/event_processor` | Environment |
+| `spring.kafka.bootstrap-servers` | Kafka bootstrap broker address | `localhost:9092` | Environment |
+| `event-processor.outbox.enabled` | Enable/disable transactional outbox publisher | `true` | Configurable |
+| `event-processor.consumer.enabled` | Enable/disable Kafka consumer listener | `true` | Configurable |
+| `event-processor.worker.enabled` | Enable/disable background retry worker | `true` | Configurable |
 
 ---
 
-## API Endpoints & Usage
+## Authentication & User Administration API
 
-### 1. Event Ingestion (`POST /api/v1/events`)
-Submits a business event with idempotency guarantees.
+### 1. User Login (`POST /api/v1/auth/login`)
+
+Authenticates an active user and issues a stateless JWT.
 
 **Request:**
 ```http
-POST /api/v1/events HTTP/1.1
+POST /api/v1/auth/login HTTP/1.1
 Content-Type: application/json
 
 {
-  "idempotencyKey": "order-evt-1001",
-  "eventType": "INVENTORY_DEDUCT",
-  "resourceId": "product-101",
-  "quantity": 2
+  "username": "admin",
+  "password": "AdminSecret123!"
 }
 ```
 
 **Response (HTTP 200 OK):**
 ```json
 {
-  "idempotencyKey": "order-evt-1001",
-  "eventType": "INVENTORY_DEDUCT",
-  "resourceId": "product-101",
-  "deductedQuantity": 2,
-  "remainingQuantity": 8,
-  "status": "PROCESSED",
-  "idempotentReplay": false,
-  "processedAt": "2026-10-26T09:30:00Z"
+  "token": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiIsInJvbGUiOiJBRE1JTiIsImlhdCI6MTc5MzYzNTUwMCwiZXhwIjoxNzkzNjM5MTAwfQ...",
+  "tokenType": "Bearer",
+  "expiresInMs": 3600000,
+  "username": "admin",
+  "role": "ADMIN"
+}
+```
+
+*Generic error on invalid credentials (HTTP 401 Unauthorized):*
+```json
+{
+  "timestamp": "2026-11-02T16:00:00Z",
+  "status": 401,
+  "error": "UNAUTHORIZED",
+  "message": "Invalid username or password"
 }
 ```
 
 ---
 
-### 2. Operations & Inspection APIs (`/api/v1/operations/**`)
+### 2. Current User Profile (`GET /api/v1/auth/me`)
 
-All operational read endpoints accept the optional header `X-Admin-API-Key: admin-secret-key-12345`.
+Retrieves the authenticated principal's profile details.
 
-#### A. Search Events with Pagination & Filters
+**Request:**
 ```http
-GET /api/v1/operations/events?status=PROCESSED&resourceId=product-101&page=0&size=20 HTTP/1.1
+GET /api/v1/auth/me HTTP/1.1
+Authorization: Bearer <your-jwt-token>
 ```
-Supports filters: `status`, `eventType`, `resourceId`, `idempotencyKey`, `from` (ISO datetime), `to` (ISO datetime), `page` (>=0), `size` (1 to 100).
 
 **Response (HTTP 200 OK):**
 ```json
 {
-  "content": [
-    {
-      "idempotencyKey": "order-evt-1001",
-      "eventType": "INVENTORY_DEDUCT",
-      "resourceId": "product-101",
-      "status": "PROCESSED",
-      "responseStatusCode": 200,
-      "retryCount": 0,
-      "maxRetries": 3,
-      "lastFailureReason": null,
-      "nextRetryAt": null,
-      "lastAttemptAt": "2026-10-26T09:30:00Z",
-      "createdAt": "2026-10-26T09:30:00Z",
-      "updatedAt": "2026-10-26T09:30:00Z",
-      "requestPayload": "{\"idempotencyKey\":\"order-evt-1001\",\"eventType\":\"INVENTORY_DEDUCT\",\"resourceId\":\"product-101\",\"quantity\":2}",
-      "responsePayload": "{\"idempotencyKey\":\"order-evt-1001\",\"eventType\":\"INVENTORY_DEDUCT\",\"resourceId\":\"product-101\",\"deductedQuantity\":2,\"remainingQuantity\":8,\"status\":\"PROCESSED\",\"idempotentReplay\":false}",
-      "outbox": {
-        "id": 1,
-        "status": "PUBLISHED",
-        "topic": "inventory-events",
-        "partitionKey": "product-101",
-        "retryCount": 0,
-        "maxRetries": 3,
-        "lastError": null,
-        "publishedAt": "2026-10-26T09:30:02Z",
-        "createdAt": "2026-10-26T09:30:00Z",
-        "updatedAt": "2026-10-26T09:30:02Z"
-      }
-    }
-  ],
-  "page": 0,
-  "size": 20,
-  "totalElements": 1,
-  "totalPages": 1,
-  "first": true,
-  "last": true
+  "id": 1,
+  "username": "admin",
+  "email": "admin@eventprocessor.local",
+  "role": "ADMIN",
+  "status": "ACTIVE",
+  "createdAt": "2026-11-02T15:00:00Z"
 }
 ```
 
-#### B. Single Event Detail with Correlated Outbox State
-```http
-GET /api/v1/operations/events/{idempotencyKey} HTTP/1.1
-```
-Returns 404 Not Found with standard `ErrorResponse` if key does not exist.
+---
 
-#### C. Database Event Status Summary
+### 3. User Administration (`/api/v1/admin/users/**`)
+
+Requires `ADMIN` role.
+
+#### A. Create a New User
 ```http
-GET /api/v1/operations/events/summary HTTP/1.1
+POST /api/v1/admin/users HTTP/1.1
+Authorization: Bearer <admin-jwt-token>
+Content-Type: application/json
+
+{
+  "username": "operator1",
+  "email": "operator1@company.com",
+  "password": "SecurePassword123!",
+  "role": "OPERATOR"
+}
 ```
-**Response (HTTP 200 OK):**
+**Response (HTTP 201 Created):**
 ```json
 {
-  "totalEvents": 42,
-  "processedCount": 38,
-  "retryPendingCount": 2,
-  "deadLetterCount": 2,
-  "processingCount": 0,
-  "countsByStatus": {
-    "PROCESSED": 38,
-    "RETRY_PENDING": 2,
-    "DEAD_LETTER": 2
-  }
+  "id": 2,
+  "username": "operator1",
+  "email": "operator1@company.com",
+  "role": "OPERATOR",
+  "status": "ACTIVE",
+  "createdAt": "2026-11-02T16:05:00Z",
+  "updatedAt": "2026-11-02T16:05:00Z"
 }
 ```
 
-#### D. Outbox Summary
+#### B. List Users (Paginated)
 ```http
-GET /api/v1/operations/outbox/summary HTTP/1.1
-```
-**Response (HTTP 200 OK):**
-```json
-{
-  "totalOutboxEvents": 40,
-  "pendingCount": 1,
-  "claimedCount": 0,
-  "publishedCount": 39,
-  "failedCount": 0,
-  "retriedCount": 2,
-  "countsByStatus": {
-    "PENDING": 1,
-    "PUBLISHED": 39
-  }
-}
+GET /api/v1/admin/users?page=0&size=20 HTTP/1.1
+Authorization: Bearer <admin-jwt-token>
 ```
 
-#### E. Unified Operational Metrics
+#### C. Update User Role
 ```http
-GET /api/v1/operations/metrics HTTP/1.1
-```
-**Response (HTTP 200 OK):**
-```json
+PATCH /api/v1/admin/users/2/role HTTP/1.1
+Authorization: Bearer <admin-jwt-token>
+Content-Type: application/json
+
 {
-  "inMemoryMetricsNotice": "In-memory metrics reflect the current JVM process lifetime and reset upon application restart. Use database summaries for durable historical counts.",
-  "attempts": 45,
-  "successes": 38,
-  "failures": 4,
-  "duplicates": 3,
-  "retries": 5,
-  "deadLetters": 2,
-  "outboxPublished": 39,
-  "outboxFailed": 1,
-  "consumerSuccess": 35,
-  "consumerFailure": 2,
-  "consumerDuplicate": 2,
-  "databaseEvents": { ... },
-  "databaseOutbox": { ... }
+  "role": "VIEWER"
 }
 ```
 
-#### F. Operational Audit Logs
+#### D. Update User Status (Deactivate / Activate)
 ```http
-GET /api/v1/operations/audit-logs?targetIdentifier=order-evt-1001 HTTP/1.1
-```
-**Response (HTTP 200 OK):**
-```json
+PATCH /api/v1/admin/users/2/status HTTP/1.1
+Authorization: Bearer <admin-jwt-token>
+Content-Type: application/json
+
 {
-  "content": [
-    {
-      "id": 12,
-      "actionType": "DEAD_LETTER_REPROCESS",
-      "targetIdentifier": "order-evt-1001",
-      "outcome": "SUCCESS",
-      "failureReason": null,
-      "principal": "admin-api-key",
-      "details": "Event reset to RETRY_PENDING with immediate schedule",
-      "timestamp": "2026-10-26T09:35:10Z"
-    }
-  ],
-  "page": 0,
-  "size": 20,
-  "totalElements": 1,
-  "totalPages": 1
+  "status": "DEACTIVATED"
 }
 ```
+> **Lockout Protection**: Attempting to deactivate or demote the last remaining active administrator returns `HTTP 409 Conflict` to prevent system lockout.
 
 ---
 
-### 3. Actuator Health & Metrics Endpoints
+## Sending Authenticated Requests
 
-- **Health Endpoint (`GET /actuator/health`)**:
-  Inspects components:
-  - `db`: PostgreSQL connectivity via `DataSourceHealthIndicator`.
-  - `kafka`: Broker reachability and node discovery within 2-second timeout.
-  - `outbox`: Active database outbox counts and failure detection.
-  - `retryWorker`: Queue counts for pending retries and dead letters.
-- **Metrics Catalog (`GET /actuator/metrics`)**:
-  Exposes Micrometer counters and timers:
-  - `events.processing.attempts` (tags: `event_type`)
-  - `events.processing.success` (tags: `event_type`)
-  - `events.processing.failure` (tags: `event_type`, `failure_type`)
-  - `events.processed.duplicate` (tags: `event_type`, `status`)
-  - `events.retry.attempts` (tags: `event_type`)
-  - `events.deadletter.total` (tags: `event_type`, `reason_category`)
-  - `events.processing.duration` (tags: `event_type`, `outcome`)
-  - `outbox.publication.success` (tags: `topic`)
-  - `outbox.publication.failure` (tags: `topic`)
-  - `consumer.processing.success` (tags: `topic`)
-  - `consumer.processing.failure` (tags: `topic`, `failure_type`)
-  - `consumer.duplicate.deliveries` (tags: `topic`)
-- **Metric Details (`GET /actuator/metrics/{metricName}`)**:
-  Example: `GET /actuator/metrics/events.processing.success`
+Clients must include the bearer token in the HTTP `Authorization` header:
+
+```http
+Authorization: Bearer eyJhbGciOiJIUzI1NiJ9...
+```
+
+For backward compatibility with automated Phase 6 monitoring and test harnesses, operational and dead-letter endpoints also accept the pre-shared key header:
+```http
+X-Admin-API-Key: admin-secret-key-12345
+```
 
 ---
 
-### 4. Admin Recovery API (`/api/v1/admin/dead-letters/**`)
+## Initial Administrator Bootstrapping
 
-Requires header `X-Admin-API-Key: admin-secret-key-12345`.
-
-- `GET /api/v1/admin/dead-letters`: List dead-letter events.
-- `GET /api/v1/admin/dead-letters/{idempotencyKey}`: Get dead-letter event details.
-- `POST /api/v1/admin/dead-letters/{idempotencyKey}/reprocess`: Reset dead-letter event to `RETRY_PENDING` for immediate execution by the worker. Persists an audit log in `operational_audit_logs`.
-
----
-
-## In-Memory vs. Database-Derived Metrics
-
-| Metric Type | Storage | Behavior Across Restarts | Usage |
-|-------------|---------|--------------------------|-------|
-| **Micrometer / Actuator Metrics** | In-Memory (JVM Heap) | **Resets to 0** on service restart | Real-time rate monitoring, Prometheus scraping, Grafana alerting, latency percentiles |
-| **Database Summaries (`/events/summary`, `/outbox/summary`)** | PostgreSQL (`processed_events`, `outbox_events`) | **Durable & Permanent** | Long-term historical counts, SLA compliance reporting, audit reconciliation |
+On application startup, `AdminBootstrapService` verifies whether an active administrator exists in `app_users`:
+- **Development / Test**: If no administrator exists and `BOOTSTRAP_ADMIN_PASSWORD` is unset, the service initializes a default administrator (`admin` / `AdminSecret123!`).
+- **Production**: When `spring.profiles.active=prod`, `BOOTSTRAP_ADMIN_PASSWORD` must be provided as an environment variable (or the bootstrap disabled via `event-processor.security.bootstrap.enabled=false`). The service fails safely and throws a startup exception if required production credentials are absent.
+- Once created, administrators can provision additional operators and viewers via `POST /api/v1/admin/users`.
 
 ---
 
-## Security & Operational Limitations
+## Security Audit Trail
 
-1. **Pre-Shared API Key**: Administrative operations use header-based API key authentication (`X-Admin-API-Key`). In production, this should be integrated into OAuth2 / OIDC (e.g. Keycloak or AWS Cognito) with role-based access control (RBAC).
-2. **Audit Principal**: Without a full security context / JWT, the audit log records `admin-api-key` or `SYSTEM`. Operator usernames are not tracked unless an identity provider is integrated.
-3. **Sensitive Data Protection**: Passwords, credentials, and raw database connection strings are masked and never exposed in actuator health details, logs, or error responses.
-4. **Metric Label Bounding**: High-cardinality values (idempotency keys, resource IDs, customer names, raw exception stack traces) are strictly forbidden as metric tags to prevent JVM memory exhaustion (cardinality explosion).
+Security actions are automatically recorded in `operational_audit_logs` with the actor derived authoritatively from `SecurityContextHolder`:
+
+| Action Type | Target | Description |
+|-------------|--------|-------------|
+| `LOGIN_SUCCESS` | Username | Successful JWT token issuance |
+| `LOGIN_FAILED` | Username | Failed authentication attempt (bad credentials or deactivated account) |
+| `USER_CREATED` | Username | New user account provisioned with assigned role |
+| `USER_ROLE_UPDATED` | User ID | Administrator updated user role (`ADMIN`, `OPERATOR`, `VIEWER`) |
+| `USER_STATUS_UPDATED` | User ID | Administrator changed account status (`ACTIVE`, `DEACTIVATED`) |
+| `ACCESS_DENIED` | Request URI | Authenticated actor attempted an unauthorized privileged route |
+| `DEAD_LETTER_REPROCESS` | Idempotency Key | Operator or Admin triggered dead-letter recovery re-queue |
+
+Inspect audit logs with `ADMIN` privileges:
+```http
+GET /api/v1/operations/audit-logs?page=0&size=50 HTTP/1.1
+Authorization: Bearer <admin-jwt-token>
+```
 
 ---
 
-## How to Run Tests & Verification
+## Production Security Recommendations & Limitations
 
-Set the `DB_PASSWORD` environment variable and run the Maven wrapper:
+1. **JWT Secret Management**: Never check signing secrets into source control. In production, configure `JWT_SECRET` via AWS Secrets Manager, HashiCorp Vault, or Kubernetes Secrets. Secret must be at least 256 bits (32 bytes).
+2. **Rate Limiting Architecture**: In-memory rate limiting (`LoginRateLimiter`, `IngestionRateLimiter`) provides single-node abuse defense. In horizontally scaled multi-pod production environments, front the cluster with an API Gateway (e.g. Kong, AWS API Gateway) or Redis-backed distributed token bucket.
+3. **HTTPS / TLS Termination**: JWT bearer tokens must only be transmitted over secure TLS connections (`https://`) to prevent credential sniffing on transit networks.
+4. **Token Expiration & Revocation**: Access tokens are stateless with a 1-hour default TTL. In high-security environments, reduce TTL (e.g. 15 minutes) and implement a server-side revocation blacklist (Redis or database) or an OAuth2/OIDC identity provider (Keycloak, Auth0).
+
+---
+
+## Running the Automated Test Suite
+
+Set your database password and execute Maven:
 
 ```powershell
 $env:DB_PASSWORD="your-postgres-password"
-.\mvnw.cmd clean verify
+.\mvnw.cmd test
 ```
 
-To run targeted Phase 6 tests only:
+To run targeted Phase 7 security and authorization tests:
 ```powershell
 $env:DB_PASSWORD="your-postgres-password"
-.\mvnw.cmd test -Dtest=OperationsAndObservabilityIntegrationTest
+.\mvnw.cmd test -Dtest=SecurityAndRoleAuthorizationIntegrationTest
+```
+
+To run the complete verification suite across all phases:
+```powershell
+$env:DB_PASSWORD="your-postgres-password"
+.\mvnw.cmd clean test
 ```

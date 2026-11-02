@@ -64,12 +64,15 @@ class OutboxIntegrationTest {
 
     @BeforeEach
     void setupInventory() {
-        inventoryRepository.findByResourceId("outbox-prod-1")
-                .map(inv -> {
-                    inv.setAvailableQuantity(50);
-                    return inventoryRepository.save(inv);
-                })
-                .orElseGet(() -> inventoryRepository.save(new Inventory("outbox-prod-1", 50)));
+        transactionTemplate.execute(status -> {
+            inventoryRepository.findByResourceIdForUpdate("outbox-prod-1")
+                    .map(inv -> {
+                        inv.setAvailableQuantity(50);
+                        return inventoryRepository.save(inv);
+                    })
+                    .orElseGet(() -> inventoryRepository.save(new Inventory("outbox-prod-1", 50)));
+            return null;
+        });
     }
 
     @Test

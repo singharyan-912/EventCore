@@ -4,22 +4,19 @@ import com.eventprocessor.reliable_event_processor.dto.DeadLetterResponse;
 import com.eventprocessor.reliable_event_processor.dto.PageResponse;
 import com.eventprocessor.reliable_event_processor.service.DeadLetterService;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 /**
  * Administrative endpoints for dead-letter event management.
  *
- * SECURITY: All endpoints require the X-Admin-API-Key header.
- *
- * LOCAL DEVELOPMENT SETUP:
- *   Default key: "admin-secret-key-12345" (configured in AdminSecurityProperties)
- *   Override via: event-processor.admin.api-key=<your-key> in application.properties
- *   or environment variable: EVENT_PROCESSOR_ADMIN_API_KEY=<your-key>
- *
- * Example header: X-Admin-API-Key: admin-secret-key-12345
+ * SECURITY: Accessible by ADMIN and OPERATOR roles.
+ * Supports Bearer JWT tokens and backward-compatible X-Admin-API-Key header.
  */
 @RestController
 @RequestMapping("/api/v1/admin/dead-letters")
+@PreAuthorize("hasAnyRole('ADMIN', 'OPERATOR')")
 public class DeadLetterController {
 
     private final DeadLetterService deadLetterService;
@@ -34,10 +31,12 @@ public class DeadLetterController {
      */
     @GetMapping
     public ResponseEntity<PageResponse<DeadLetterResponse>> listDeadLetters(
-            @RequestHeader("X-Admin-API-Key") String apiKey,
+            @RequestHeader(value = "X-Admin-API-Key", required = false) String apiKey,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
-        deadLetterService.validateApiKey(apiKey);
+        if (apiKey != null) {
+            deadLetterService.validateApiKey(apiKey);
+        }
         return ResponseEntity.ok(deadLetterService.listDeadLetterEvents(page, size));
     }
 
@@ -47,9 +46,11 @@ public class DeadLetterController {
      */
     @GetMapping("/{idempotencyKey}")
     public ResponseEntity<DeadLetterResponse> getDeadLetter(
-            @RequestHeader("X-Admin-API-Key") String apiKey,
+            @RequestHeader(value = "X-Admin-API-Key", required = false) String apiKey,
             @PathVariable String idempotencyKey) {
-        deadLetterService.validateApiKey(apiKey);
+        if (apiKey != null) {
+            deadLetterService.validateApiKey(apiKey);
+        }
         return ResponseEntity.ok(deadLetterService.getDeadLetterEvent(idempotencyKey));
     }
 
@@ -61,9 +62,15 @@ public class DeadLetterController {
      */
     @PostMapping("/{idempotencyKey}/reprocess")
     public ResponseEntity<DeadLetterResponse> requestReprocessing(
-            @RequestHeader("X-Admin-API-Key") String apiKey,
-            @PathVariable String idempotencyKey) {
-        deadLetterService.validateApiKey(apiKey);
-        return ResponseEntity.ok(deadLetterService.requestReprocessing(idempotencyKey, "admin-api-key"));
+            @RequestHeader(value = "X-Admin-API-Key", required = false) String apiKey,
+            @PathVariable String idempotencyKey,
+            Authentication authentication) {
+        if (apiKey != null) {
+            deadLetterService.validateApiKey(apiKey);
+        }
+        String principal = (authentication != null && authentication.getName() != null)
+                ? authentication.getName()
+                : "admin-api-key";
+        return ResponseEntity.ok(deadLetterService.requestReprocessing(idempotencyKey, principal));
     }
 }

@@ -8,6 +8,7 @@ import com.eventprocessor.reliable_event_processor.service.OperationalAuditServi
 import com.eventprocessor.reliable_event_processor.service.OperationsService;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.OffsetDateTime;
@@ -45,6 +46,7 @@ public class OperationsController {
      * GET /api/v1/operations/events?status=PROCESSED&page=0&size=20
      */
     @GetMapping("/events")
+    @PreAuthorize("hasAnyRole('ADMIN', 'OPERATOR', 'VIEWER')")
     public ResponseEntity<PageResponse<EventDetailResponse>> searchEvents(
             @RequestHeader(value = "X-Admin-API-Key", required = false) String apiKey,
             @RequestParam(required = false) String status,
@@ -65,6 +67,7 @@ public class OperationsController {
      * GET /api/v1/operations/events/{idempotencyKey}
      */
     @GetMapping("/events/{idempotencyKey}")
+    @PreAuthorize("hasAnyRole('ADMIN', 'OPERATOR', 'VIEWER')")
     public ResponseEntity<EventDetailResponse> getEventDetail(
             @RequestHeader(value = "X-Admin-API-Key", required = false) String apiKey,
             @PathVariable String idempotencyKey) {
@@ -77,6 +80,7 @@ public class OperationsController {
      * GET /api/v1/operations/events/summary
      */
     @GetMapping("/events/summary")
+    @PreAuthorize("hasAnyRole('ADMIN', 'OPERATOR', 'VIEWER')")
     public ResponseEntity<EventSummaryResponse> getEventSummary(
             @RequestHeader(value = "X-Admin-API-Key", required = false) String apiKey) {
         validateApiKeyIfPresent(apiKey);
@@ -88,6 +92,7 @@ public class OperationsController {
      * GET /api/v1/operations/outbox/summary
      */
     @GetMapping("/outbox/summary")
+    @PreAuthorize("hasAnyRole('ADMIN', 'OPERATOR', 'VIEWER')")
     public ResponseEntity<OutboxSummaryResponse> getOutboxSummary(
             @RequestHeader(value = "X-Admin-API-Key", required = false) String apiKey) {
         validateApiKeyIfPresent(apiKey);
@@ -99,6 +104,7 @@ public class OperationsController {
      * GET /api/v1/operations/metrics
      */
     @GetMapping("/metrics")
+    @PreAuthorize("hasAnyRole('ADMIN', 'OPERATOR', 'VIEWER')")
     public ResponseEntity<OperationsMetricsResponse> getOperationsMetrics(
             @RequestHeader(value = "X-Admin-API-Key", required = false) String apiKey) {
         validateApiKeyIfPresent(apiKey);
@@ -110,6 +116,7 @@ public class OperationsController {
      * GET /api/v1/operations/audit-logs?page=0&size=20
      */
     @GetMapping("/audit-logs")
+    @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<PageResponse<OperationalAuditLogResponse>> getAuditLogs(
             @RequestHeader(value = "X-Admin-API-Key", required = false) String apiKey,
             @RequestParam(required = false) String actionType,
