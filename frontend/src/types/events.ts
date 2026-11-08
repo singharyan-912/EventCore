@@ -53,3 +53,14 @@ export interface DeadLetterResponse {
   createdAt: string
   updatedAt: string
 }
+
+export interface EventSearchParams {
+  status?: string
+  eventType?: string
+  resourceId?: string
+  idempotencyKey?: string
+  from?: string
+  to?: string
+  page?: number
+  size?: number
+}

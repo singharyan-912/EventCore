@@ -20,7 +20,7 @@ export function LoadingState({
       )}
     >
       <Spinner size={size} />
-      {message && <p className="text-xs font-medium text-slate-500">{message}</p>}
+      {message && <p className="text-xs font-medium text-slate-500 dark:text-slate-400">{message}</p>}
     </div>
   )
 }

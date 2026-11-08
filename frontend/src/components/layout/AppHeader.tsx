@@ -14,6 +14,8 @@ import { Dropdown } from '../common/Dropdown'
 import { Badge } from '../common/Badge'
 import { useTheme } from '../../hooks/useTheme'
 import { navigationConfig } from '../../routes/navConfig'
+import { tokenStorage } from '../../utils/tokenStorage'
+import { authService } from '../../services/authService'
 
 interface AppHeaderProps {
   onToggleMobileSidebar: () => void
@@ -37,18 +39,21 @@ export function AppHeader({
   )
   const pageTitle = currentItem?.label || 'ReliableFlow Console'
 
-  // Default demonstration profile for Phase 2 (prior to auth phase wiring)
-  const user = {
-    username: 'admin',
-    email: 'admin@eventprocessor.local',
-    role: 'ADMIN',
-    initials: 'AD',
+  // Retrieve authenticated principal session if present
+  const sessionUser = tokenStorage.getUser()
+  const username = sessionUser?.username || 'admin'
+  const role = sessionUser?.role || 'ADMIN'
+  const initials = username.slice(0, 2).toUpperCase()
+
+  const handleLogout = async () => {
+    await authService.logout()
+    navigate('/login')
   }
 
   const profileMenuItems = [
     {
       id: 'profile-header',
-      label: `${user.username} (${user.role})`,
+      label: `${username} (${role})`,
       icon: <User className="h-3.5 w-3.5 text-indigo-500" />,
       onClick: () => navigate('/settings'),
     },
@@ -67,7 +72,7 @@ export function AppHeader({
       id: 'documentation',
       label: 'Swagger / Actuator (:8080)',
       icon: <ExternalLink className="h-3.5 w-3.5 text-slate-400" />,
-      onClick: () => window.open('http://localhost:8080/actuator/health', '_blank'),
+      onClick: () => window.open('/actuator/health', '_blank'),
     },
     {
       id: 'divider-2',
@@ -76,10 +81,10 @@ export function AppHeader({
     },
     {
       id: 'logout',
-      label: 'Sign Out (Demo)',
+      label: 'Sign Out',
       icon: <LogOut className="h-3.5 w-3.5 text-rose-500" />,
       danger: true,
-      onClick: () => navigate('/login'),
+      onClick: handleLogout,
     },
   ]
 
@@ -150,18 +155,18 @@ export function AppHeader({
           trigger={
             <div className="flex items-center gap-2 pl-1 group">
               <div className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-600 text-[11px] font-bold text-white shadow-2xs ring-2 ring-indigo-600/20 group-hover:ring-indigo-600/40 transition-all dark:bg-indigo-500">
-                {user.initials}
+                {initials}
               </div>
               <div className="hidden md:flex flex-col text-left">
                 <span className="text-xs font-semibold text-slate-900 dark:text-slate-100 leading-tight">
-                  {user.username}
+                  {username}
                 </span>
                 <span className="text-[10px] font-mono text-slate-500 dark:text-slate-400">
-                  {user.role}
+                  {role}
                 </span>
               </div>
               <Badge variant="accent" className="hidden lg:inline-flex text-[10px] ml-0.5">
-                {user.role}
+                {role}
               </Badge>
             </div>
           }
