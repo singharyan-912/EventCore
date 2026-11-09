@@ -10,6 +10,7 @@ import { AuditLogsPage } from './pages/AuditLogsPage'
 import { UsersPage } from './pages/UsersPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { LoginPage } from './pages/LoginPage'
+import { ProtectedRoute } from './components/auth/ProtectedRoute'
 
 export const router = createBrowserRouter([
   {
@@ -46,11 +47,19 @@ export const router = createBrowserRouter([
       },
       {
         path: 'audit-logs',
-        element: <AuditLogsPage />,
+        element: (
+          <ProtectedRoute allowedRoles={['ADMIN']} featureName="Security & Operational Audit Logs">
+            <AuditLogsPage />
+          </ProtectedRoute>
+        ),
       },
       {
         path: 'users',
-        element: <UsersPage />,
+        element: (
+          <ProtectedRoute allowedRoles={['ADMIN']} featureName="User Management & RBAC Administration">
+            <UsersPage />
+          </ProtectedRoute>
+        ),
       },
       {
         path: 'settings',

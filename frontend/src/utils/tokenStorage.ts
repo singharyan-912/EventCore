@@ -3,10 +3,28 @@ import type { AuthResponse } from '../types/auth'
 const TOKEN_KEY = 'reliableflow_token'
 const USER_KEY = 'reliableflow_user'
 
+// In-memory fallback for SSR/Node environments where localStorage is not present
+const memoryStore = new Map<string, string>()
+
+const getStorage = () => {
+  if (typeof window !== 'undefined' && window.localStorage) {
+    return window.localStorage
+  }
+  return {
+    getItem: (key: string) => memoryStore.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      memoryStore.set(key, value)
+    },
+    removeItem: (key: string) => {
+      memoryStore.delete(key)
+    },
+  }
+}
+
 export const tokenStorage = {
   getToken: (): string | null => {
     try {
-      return localStorage.getItem(TOKEN_KEY)
+      return getStorage().getItem(TOKEN_KEY)
     } catch {
       return null
     }
@@ -14,8 +32,9 @@ export const tokenStorage = {
 
   setAuth: (data: AuthResponse): void => {
     try {
-      localStorage.setItem(TOKEN_KEY, data.token)
-      localStorage.setItem(
+      const storage = getStorage()
+      storage.setItem(TOKEN_KEY, data.token)
+      storage.setItem(
         USER_KEY,
         JSON.stringify({
           username: data.username,
@@ -30,7 +49,7 @@ export const tokenStorage = {
 
   getUser: (): { username: string; role: string; expiresAt: number } | null => {
     try {
-      const user = localStorage.getItem(USER_KEY)
+      const user = getStorage().getItem(USER_KEY)
       return user ? JSON.parse(user) : null
     } catch {
       return null
@@ -39,8 +58,9 @@ export const tokenStorage = {
 
   clearAuth: (): void => {
     try {
-      localStorage.removeItem(TOKEN_KEY)
-      localStorage.removeItem(USER_KEY)
+      const storage = getStorage()
+      storage.removeItem(TOKEN_KEY)
+      storage.removeItem(USER_KEY)
     } catch (e) {
       console.error('Failed to clear auth from storage', e)
     }

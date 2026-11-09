@@ -4,9 +4,12 @@ import {
   X,
   ChevronLeft,
   ChevronRight,
+  Lock,
 } from 'lucide-react'
 import { navigationConfig } from '../../routes/navConfig'
 import { cn } from '../../utils/cn'
+import { tokenStorage } from '../../utils/tokenStorage'
+import type { Role } from '../../types/auth'
 
 interface AppSidebarProps {
   isMobileOpen: boolean
@@ -21,6 +24,9 @@ export function AppSidebar({
   isCollapsed,
   onToggleCollapse,
 }: AppSidebarProps) {
+  const user = tokenStorage.getUser()
+  const userRole = (user?.role as Role) || 'VIEWER'
+
   return (
     <>
       {/* Mobile Backdrop */}
@@ -85,6 +91,11 @@ export function AppSidebar({
               <nav className="space-y-0.5">
                 {section.items.map((item) => {
                   const Icon = item.icon
+                  const isRestricted = Boolean(item.requiredRoles && !item.requiredRoles.includes(userRole))
+                  const tooltipText = isRestricted
+                    ? `${item.label} (Requires ${item.requiredRoles?.join(', ')})`
+                    : item.label
+
                   return (
                     <NavLink
                       key={item.id}
@@ -93,7 +104,7 @@ export function AppSidebar({
                       onClick={() => {
                         if (window.innerWidth < 1024) onCloseMobile()
                       }}
-                      title={isCollapsed ? item.label : undefined}
+                      title={isCollapsed || isRestricted ? tooltipText : undefined}
                       className={({ isActive }) =>
                         cn(
                           'flex items-center rounded-md text-xs font-medium transition-colors select-none group',
@@ -102,27 +113,38 @@ export function AppSidebar({
                             : 'px-3 py-2 justify-between',
                           isActive
                             ? 'bg-indigo-50 text-indigo-700 font-semibold shadow-2xs dark:bg-indigo-950/60 dark:text-indigo-300'
+                            : isRestricted
+                            ? 'text-slate-400 hover:bg-slate-100/50 dark:text-slate-500 dark:hover:bg-slate-800/50'
                             : 'text-slate-600 hover:bg-slate-100/80 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/80 dark:hover:text-slate-200'
                         )
                       }
                     >
                       <div className="flex items-center gap-2.5 truncate">
                         <Icon className="h-4 w-4 shrink-0 transition-transform group-hover:scale-105" />
-                        {!isCollapsed && <span className="truncate">{item.label}</span>}
+                        {!isCollapsed && (
+                          <span className="truncate flex items-center gap-1.5">
+                            {item.label}
+                            {isRestricted && (
+                              <Lock className="h-3 w-3 text-slate-400 dark:text-slate-500" />
+                            )}
+                          </span>
+                        )}
                       </div>
 
                       {!isCollapsed && item.badge && (
                         <span
                           className={cn(
                             'rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-tight shrink-0',
-                            item.badgeVariant === 'warning'
+                            isRestricted
+                              ? 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'
+                              : item.badgeVariant === 'warning'
                               ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300'
                               : item.badgeVariant === 'error'
                               ? 'bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300'
                               : 'bg-indigo-100 text-indigo-800 dark:bg-indigo-950/60 dark:text-indigo-300'
                           )}
                         >
-                          {item.badge}
+                          {isRestricted ? 'Locked' : item.badge}
                         </span>
                       )}
                     </NavLink>

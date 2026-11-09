@@ -1,4 +1,5 @@
 import React from 'react'
+import type { Role } from '../types/auth'
 import {
   LayoutDashboard,
   Layers,
@@ -18,6 +19,7 @@ export interface NavItem {
   badge?: string
   badgeVariant?: 'neutral' | 'warning' | 'error' | 'accent' | 'info'
   description: string
+  requiredRoles?: Role[]
 }
 
 export interface NavSection {
@@ -83,6 +85,7 @@ export const navigationConfig: NavSection[] = [
         icon: ShieldAlert,
         badge: 'Admin',
         badgeVariant: 'error',
+        requiredRoles: ['ADMIN'],
         description: 'Immutable security lifecycle and operational recovery audit records',
       },
     ],
@@ -97,6 +100,7 @@ export const navigationConfig: NavSection[] = [
         icon: Users,
         badge: 'Admin',
         badgeVariant: 'error',
+        requiredRoles: ['ADMIN'],
         description: 'Console user provisioning, RBAC roles, and status management',
       },
       {
