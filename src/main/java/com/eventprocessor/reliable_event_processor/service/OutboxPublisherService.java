@@ -72,7 +72,8 @@ public class OutboxPublisherService {
                 event.getPartitionKey(),
                 event.getIdempotencyKey(),
                 event.getPayload(),
-                Instant.now()
+                Instant.now(),
+                event.getTenantId()
         );
 
         String messageJson;

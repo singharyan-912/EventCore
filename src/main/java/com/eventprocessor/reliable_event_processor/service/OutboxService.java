@@ -31,11 +31,17 @@ public class OutboxService {
      * Guarantees atomic persistence with business entity updates and processed_events state.
      */
     @Transactional(propagation = Propagation.MANDATORY)
-    public OutboxEvent recordOutboxEvent(String idempotencyKey,
+    public OutboxEvent recordOutboxEvent(String tenantId,
+                                         String idempotencyKey,
                                          String eventType,
                                          String partitionKey,
                                          String payload) {
+        String effectiveTenant = (tenantId != null && !tenantId.isBlank())
+                ? tenantId
+                : com.eventprocessor.reliable_event_processor.security.TenantContext.getTenantId();
+
         OutboxEvent outboxEvent = new OutboxEvent(
+                effectiveTenant,
                 idempotencyKey,
                 eventType,
                 outboxProperties.getTopic(),
@@ -44,8 +50,17 @@ public class OutboxService {
         );
         outboxEvent.setMaxRetries(outboxProperties.getMaxRetries());
         OutboxEvent saved = outboxEventRepository.save(outboxEvent);
-        log.info("Recorded outbox event #{} for idempotencyKey='{}', topic='{}'",
-                saved.getId(), idempotencyKey, outboxProperties.getTopic());
+        log.info("Recorded outbox event #{} for tenant='{}', idempotencyKey='{}', topic='{}'",
+                saved.getId(), effectiveTenant, idempotencyKey, outboxProperties.getTopic());
         return saved;
+    }
+
+    @Transactional(propagation = Propagation.MANDATORY)
+    public OutboxEvent recordOutboxEvent(String idempotencyKey,
+                                         String eventType,
+                                         String partitionKey,
+                                         String payload) {
+        return recordOutboxEvent(com.eventprocessor.reliable_event_processor.security.TenantContext.getTenantId(),
+                idempotencyKey, eventType, partitionKey, payload);
     }
 }

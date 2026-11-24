@@ -28,10 +28,10 @@ public class AuthService {
     private final OperationalAuditService auditService;
 
     public AuthService(UserRepository userRepository,
-                       PasswordEncoder passwordEncoder,
-                       JwtTokenProvider jwtTokenProvider,
-                       LoginRateLimiter rateLimiter,
-                       OperationalAuditService auditService) {
+            PasswordEncoder passwordEncoder,
+            JwtTokenProvider jwtTokenProvider,
+            LoginRateLimiter rateLimiter,
+            OperationalAuditService auditService) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
         this.jwtTokenProvider = jwtTokenProvider;
@@ -50,20 +50,18 @@ public class AuthService {
                     "FAILED",
                     "Rate limit exceeded",
                     "ANONYMOUS",
-                    "Login rejected due to rate limiting from IP: " + rateLimitKey
-            );
+                    "Login rejected due to rate limiting from IP: " + rateLimitKey);
             throw new UnauthorizedException("Too many failed login attempts. Please try again later.");
         }
 
         AppUser user = userRepository.findByUsername(request.username()).orElse(null);
 
-        // Constant-time check mitigation: verify password hash only if user found,
-        // otherwise perform dummy comparison to resist timing-based user enumeration.
         boolean passwordMatches = false;
         if (user != null) {
             passwordMatches = passwordEncoder.matches(request.password(), user.getPasswordHash());
         } else {
-            passwordEncoder.matches("dummyPasswordToEqualizeTiming", "$2a$10$7EqJtq98hPqEX7fNZaFWoO.8/iQkCiqe81K25g1k61Hl2Zt2YVv1m");
+            passwordEncoder.matches("dummyPasswordToEqualizeTiming",
+                    "$2a$10$7EqJtq98hPqEX7fNZaFWoO.8/iQkCiqe81K25g1k61Hl2Zt2YVv1m");
         }
 
         if (user == null || !passwordMatches) {
@@ -74,8 +72,7 @@ public class AuthService {
                     "FAILED",
                     "Invalid credentials",
                     "ANONYMOUS",
-                    "Authentication failed for user: " + request.username()
-            );
+                    "Authentication failed for user: " + request.username());
             throw new UnauthorizedException("Invalid username or password");
         }
 
@@ -86,8 +83,7 @@ public class AuthService {
                     "FAILED",
                     "Account is deactivated",
                     user.getUsername(),
-                    "Login attempt rejected for inactive user"
-            );
+                    "Login attempt rejected for inactive user");
             throw new UnauthorizedException("Account is deactivated");
         }
 
@@ -99,10 +95,9 @@ public class AuthService {
                 "SUCCESS",
                 null,
                 user.getUsername(),
-                "User authenticated successfully"
-        );
+                "User authenticated successfully");
 
-        String token = jwtTokenProvider.generateToken(user.getUsername(), user.getRole().name());
+        String token = jwtTokenProvider.generateToken(user.getUsername(), user.getRole().name(), user.getTenantId());
         return new AuthResponse(token, jwtTokenProvider.getExpirationMs(), user.getUsername(), user.getRole().name());
     }
 
@@ -115,8 +110,8 @@ public class AuthService {
                 user.getUsername(),
                 user.getEmail(),
                 user.getRole().name(),
-                user.getStatus().name()
-        );
+                user.getStatus().name(),
+                user.getTenantId());
     }
 
     public void logout(String username) {
@@ -127,9 +122,7 @@ public class AuthService {
                     "SUCCESS",
                     null,
                     username,
-                    "User logged out successfully"
-            );
+                    "User logged out successfully");
         }
     }
 }
-

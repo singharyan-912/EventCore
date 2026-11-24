@@ -62,7 +62,11 @@ public class UserService {
         }
 
         String encodedPassword = passwordEncoder.encode(request.password());
+        String tenantId = (request.tenantId() != null && !request.tenantId().isBlank())
+                ? request.tenantId()
+                : "DEFAULT_BUSINESS";
         AppUser user = new AppUser(
+                tenantId,
                 request.username(),
                 request.email(),
                 encodedPassword,
@@ -185,7 +189,8 @@ public class UserService {
                 user.getRole().name(),
                 user.getStatus().name(),
                 user.getCreatedAt(),
-                user.getUpdatedAt()
+                user.getUpdatedAt(),
+                user.getTenantId()
         );
     }
 }

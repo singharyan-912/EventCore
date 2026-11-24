@@ -4,14 +4,19 @@ import jakarta.persistence.*;
 import java.time.OffsetDateTime;
 
 @Entity
-@Table(name = "inventory")
+@Table(name = "inventory", uniqueConstraints = {
+        @UniqueConstraint(name = "uk_inventory_tenant_resource", columnNames = {"tenant_id", "resource_id"})
+})
 public class Inventory {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "resource_id", nullable = false, unique = true, length = 100)
+    @Column(name = "tenant_id", nullable = false, length = 50)
+    private String tenantId = "DEFAULT_BUSINESS";
+
+    @Column(name = "resource_id", nullable = false, length = 100)
     private String resourceId;
 
     @Column(name = "available_quantity", nullable = false)
@@ -30,13 +35,26 @@ public class Inventory {
     public Inventory() {
     }
 
-    public Inventory(String resourceId, Integer availableQuantity) {
+    public Inventory(String tenantId, String resourceId, Integer availableQuantity) {
+        this.tenantId = (tenantId != null && !tenantId.isBlank()) ? tenantId : "DEFAULT_BUSINESS";
         this.resourceId = resourceId;
         this.availableQuantity = availableQuantity;
     }
 
+    public Inventory(String resourceId, Integer availableQuantity) {
+        this("DEFAULT_BUSINESS", resourceId, availableQuantity);
+    }
+
     public Long getId() {
         return id;
+    }
+
+    public String getTenantId() {
+        return tenantId;
+    }
+
+    public void setTenantId(String tenantId) {
+        this.tenantId = tenantId;
     }
 
     public String getResourceId() {

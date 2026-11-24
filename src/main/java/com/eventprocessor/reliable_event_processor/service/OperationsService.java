@@ -6,6 +6,7 @@ import com.eventprocessor.reliable_event_processor.entity.ProcessedEvent;
 import com.eventprocessor.reliable_event_processor.exception.ResourceNotFoundException;
 import com.eventprocessor.reliable_event_processor.repository.OutboxEventRepository;
 import com.eventprocessor.reliable_event_processor.repository.ProcessedEventRepository;
+import com.eventprocessor.reliable_event_processor.security.TenantContext;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.search.Search;
@@ -64,6 +65,10 @@ public class OperationsService {
 
         Specification<ProcessedEvent> spec = (root, query, cb) -> {
             var predicates = cb.conjunction();
+            if (!TenantContext.isPlatformAdminBypass()) {
+                String tenantId = TenantContext.getTenantId();
+                predicates = cb.and(predicates, cb.equal(root.get("tenantId"), tenantId));
+            }
             if (status != null && !status.isBlank()) {
                 predicates = cb.and(predicates, cb.equal(root.get("status"), status.trim().toUpperCase()));
             }
@@ -92,11 +97,28 @@ public class OperationsService {
                 .map(ProcessedEvent::getIdempotencyKey)
                 .toList();
 
-        Map<String, OutboxEvent> outboxMap = outboxEventRepository.findByIdempotencyKeyIn(keys).stream()
-                .collect(Collectors.toMap(OutboxEvent::getIdempotencyKey, o -> o, (o1, o2) -> o1));
+        Map<String, OutboxEvent> outboxMap;
+        if (TenantContext.isPlatformAdminBypass()) {
+            outboxMap = outboxEventRepository.findByIdempotencyKeyIn(keys).stream()
+                    .collect(Collectors.toMap(
+                            o -> o.getTenantId() + "::" + o.getIdempotencyKey(),
+                            o -> o,
+                            (o1, o2) -> o1));
+        } else {
+            String tenantId = TenantContext.getTenantId();
+            outboxMap = outboxEventRepository.findByTenantIdAndIdempotencyKeyIn(tenantId, keys).stream()
+                    .collect(Collectors.toMap(
+                            OutboxEvent::getIdempotencyKey,
+                            o -> o,
+                            (o1, o2) -> o1));
+        }
 
-        Page<EventDetailResponse> mapped = eventPage.map(event ->
-                toEventDetailResponse(event, outboxMap.get(event.getIdempotencyKey())));
+        Page<EventDetailResponse> mapped = eventPage.map(event -> {
+            OutboxEvent outbox = TenantContext.isPlatformAdminBypass()
+                    ? outboxMap.get(event.getTenantId() + "::" + event.getIdempotencyKey())
+                    : outboxMap.get(event.getIdempotencyKey());
+            return toEventDetailResponse(event, outbox);
+        });
 
         return PageResponse.from(mapped);
     }
@@ -110,10 +132,19 @@ public class OperationsService {
             throw new IllegalArgumentException("idempotencyKey must not be empty");
         }
 
-        ProcessedEvent event = processedEventRepository.findByIdempotencyKey(idempotencyKey.trim())
-                .orElseThrow(() -> new ResourceNotFoundException("Event not found with idempotency key: " + idempotencyKey));
+        ProcessedEvent event;
+        OutboxEvent outbox;
+        if (TenantContext.isPlatformAdminBypass()) {
+            event = processedEventRepository.findByIdempotencyKey(idempotencyKey.trim())
+                    .orElseThrow(() -> new ResourceNotFoundException("Event not found with idempotency key: " + idempotencyKey));
+            outbox = outboxEventRepository.findByTenantIdAndIdempotencyKey(event.getTenantId(), idempotencyKey.trim()).orElse(null);
+        } else {
+            String tenantId = TenantContext.getTenantId();
+            event = processedEventRepository.findByTenantIdAndIdempotencyKey(tenantId, idempotencyKey.trim())
+                    .orElseThrow(() -> new ResourceNotFoundException("Event not found with idempotency key: " + idempotencyKey));
+            outbox = outboxEventRepository.findByTenantIdAndIdempotencyKey(tenantId, idempotencyKey.trim()).orElse(null);
+        }
 
-        OutboxEvent outbox = outboxEventRepository.findByIdempotencyKey(idempotencyKey.trim()).orElse(null);
         return toEventDetailResponse(event, outbox);
     }
 
@@ -122,8 +153,16 @@ public class OperationsService {
      */
     @Transactional(readOnly = true)
     public EventSummaryResponse getEventSummary() {
-        long total = processedEventRepository.count();
-        List<Object[]> statusCounts = processedEventRepository.countGroupedByStatus();
+        long total;
+        List<Object[]> statusCounts;
+        if (TenantContext.isPlatformAdminBypass()) {
+            total = processedEventRepository.count();
+            statusCounts = processedEventRepository.countGroupedByStatus();
+        } else {
+            String tenantId = TenantContext.getTenantId();
+            total = processedEventRepository.countByTenantId(tenantId);
+            statusCounts = processedEventRepository.countGroupedByStatusForTenant(tenantId);
+        }
 
         Map<String, Long> map = new HashMap<>();
         for (Object[] row : statusCounts) {
@@ -145,9 +184,19 @@ public class OperationsService {
      */
     @Transactional(readOnly = true)
     public OutboxSummaryResponse getOutboxSummary() {
-        long total = outboxEventRepository.count();
-        List<Object[]> statusCounts = outboxEventRepository.countGroupedByStatus();
-        long retried = outboxEventRepository.countRetriedOutboxEvents();
+        long total;
+        List<Object[]> statusCounts;
+        long retried;
+        if (TenantContext.isPlatformAdminBypass()) {
+            total = outboxEventRepository.count();
+            statusCounts = outboxEventRepository.countGroupedByStatus();
+            retried = outboxEventRepository.countRetriedOutboxEvents();
+        } else {
+            String tenantId = TenantContext.getTenantId();
+            total = outboxEventRepository.countByTenantId(tenantId);
+            statusCounts = outboxEventRepository.countGroupedByStatusForTenant(tenantId);
+            retried = outboxEventRepository.countRetriedOutboxEventsForTenant(tenantId);
+        }
 
         Map<String, Long> map = new HashMap<>();
         for (Object[] row : statusCounts) {

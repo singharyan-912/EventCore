@@ -49,12 +49,17 @@ public class JwtTokenProvider {
     }
 
     public String generateToken(String username, String role) {
+        return generateToken(username, role, "DEFAULT_BUSINESS");
+    }
+
+    public String generateToken(String username, String role, String tenantId) {
         Date now = new Date();
         Date expiryDate = new Date(now.getTime() + jwtProperties.getExpirationMs());
 
         return Jwts.builder()
                 .subject(username)
                 .claim("role", role)
+                .claim("tenantId", (tenantId != null && !tenantId.isBlank()) ? tenantId : "DEFAULT_BUSINESS")
                 .issuedAt(now)
                 .expiration(expiryDate)
                 .signWith(signingKey, Jwts.SIG.HS256)
@@ -95,6 +100,16 @@ public class JwtTokenProvider {
                 .parseSignedClaims(token.trim())
                 .getPayload();
         return claims.get("role", String.class);
+    }
+
+    public String getTenantIdFromToken(String token) {
+        Claims claims = Jwts.parser()
+                .verifyWith(signingKey)
+                .build()
+                .parseSignedClaims(token.trim())
+                .getPayload();
+        String tenantId = claims.get("tenantId", String.class);
+        return (tenantId != null && !tenantId.isBlank()) ? tenantId : "DEFAULT_BUSINESS";
     }
 
     public long getExpirationMs() {

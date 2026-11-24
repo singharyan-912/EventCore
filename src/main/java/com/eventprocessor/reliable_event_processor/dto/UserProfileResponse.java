@@ -5,7 +5,11 @@ public record UserProfileResponse(
         String username,
         String email,
         String role,
-        String status
+        String status,
+        String tenantId
 ) {
+    public UserProfileResponse(Long id, String username, String email, String role, String status) {
+        this(id, username, email, role, status, "DEFAULT_BUSINESS");
+    }
 }
 

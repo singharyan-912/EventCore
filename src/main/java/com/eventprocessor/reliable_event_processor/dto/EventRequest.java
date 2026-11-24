@@ -18,6 +18,11 @@ public record EventRequest(
 
     @NotNull(message = "quantity must not be null")
     @Min(value = 1, message = "quantity must be a positive integer")
-    Integer quantity
+    Integer quantity,
+
+    String tenantId
 ) {
+    public EventRequest(String idempotencyKey, String eventType, String resourceId, Integer quantity) {
+        this(idempotencyKey, eventType, resourceId, quantity, null);
+    }
 }

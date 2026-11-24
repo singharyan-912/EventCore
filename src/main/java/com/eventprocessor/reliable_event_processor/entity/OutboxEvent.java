@@ -11,6 +11,9 @@ public class OutboxEvent {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Column(name = "tenant_id", nullable = false, length = 50)
+    private String tenantId = "DEFAULT_BUSINESS";
+
     @Column(name = "idempotency_key", nullable = false, length = 255)
     private String idempotencyKey;
 
@@ -50,7 +53,8 @@ public class OutboxEvent {
     public OutboxEvent() {
     }
 
-    public OutboxEvent(String idempotencyKey, String eventType, String topic, String partitionKey, String payload) {
+    public OutboxEvent(String tenantId, String idempotencyKey, String eventType, String topic, String partitionKey, String payload) {
+        this.tenantId = (tenantId != null && !tenantId.isBlank()) ? tenantId : "DEFAULT_BUSINESS";
         this.idempotencyKey = idempotencyKey;
         this.eventType = eventType;
         this.topic = topic;
@@ -62,6 +66,10 @@ public class OutboxEvent {
         this.updatedAt = OffsetDateTime.now();
     }
 
+    public OutboxEvent(String idempotencyKey, String eventType, String topic, String partitionKey, String payload) {
+        this("DEFAULT_BUSINESS", idempotencyKey, eventType, topic, partitionKey, payload);
+    }
+
     @PrePersist
     @PreUpdate
     public void prePersistOrUpdate() {
@@ -70,6 +78,14 @@ public class OutboxEvent {
 
     public Long getId() {
         return id;
+    }
+
+    public String getTenantId() {
+        return tenantId;
+    }
+
+    public void setTenantId(String tenantId) {
+        this.tenantId = tenantId;
     }
 
     public void setId(Long id) {

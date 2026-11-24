@@ -2,6 +2,7 @@ package com.eventprocessor.reliable_event_processor.service;
 
 import com.eventprocessor.reliable_event_processor.config.RetryProperties;
 import com.eventprocessor.reliable_event_processor.dto.EventResponse;
+import com.eventprocessor.reliable_event_processor.dto.OperationResponse;
 import com.eventprocessor.reliable_event_processor.entity.EventStatus;
 import com.eventprocessor.reliable_event_processor.entity.ProcessedEvent;
 import com.eventprocessor.reliable_event_processor.exception.IdempotencyConflictException;
@@ -46,25 +47,29 @@ public class ReliabilityEngine {
     private final RetryProperties retryProperties;
     private final OutboxService outboxService;
     private final EventMetricsService metricsService;
+    private final com.eventprocessor.reliable_event_processor.config.ReliabilityEnhancementProperties enhancementProperties;
 
     public ReliabilityEngine(ProcessedEventRepository processedEventRepository,
                              ObjectMapper objectMapper,
                              PlatformTransactionManager transactionManager,
                              RetryProperties retryProperties,
                              OutboxService outboxService,
-                             EventMetricsService metricsService) {
+                             EventMetricsService metricsService,
+                             com.eventprocessor.reliable_event_processor.config.ReliabilityEnhancementProperties enhancementProperties) {
         this.processedEventRepository = processedEventRepository;
         this.objectMapper = objectMapper;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
         this.retryProperties = retryProperties;
         this.outboxService = outboxService;
         this.metricsService = metricsService;
+        this.enhancementProperties = enhancementProperties;
     }
 
     /**
-     * Executes an arbitrary business operation with idempotent reliability semantics.
+     * Executes an arbitrary business operation with idempotent reliability semantics for a specific tenant.
      */
     public <R> R executeIdempotent(
+            String tenantId,
             String idempotencyKey,
             String eventType,
             String resourceId,
@@ -74,10 +79,14 @@ public class ReliabilityEngine {
             Supplier<R> businessOperation,
             UnaryOperator<R> replayTransformer
     ) {
+        String effectiveTenant = (tenantId != null && !tenantId.isBlank())
+                ? tenantId
+                : com.eventprocessor.reliable_event_processor.security.TenantContext.getTenantId();
+
         String payloadHash = calculateSha256(payloadToHash);
 
-        // Fast-path read outside transaction
-        Optional<ProcessedEvent> existingEvent = processedEventRepository.findByIdempotencyKey(idempotencyKey);
+        // Fast-path read outside transaction for tenant
+        Optional<ProcessedEvent> existingEvent = processedEventRepository.findByTenantIdAndIdempotencyKey(effectiveTenant, idempotencyKey);
         if (existingEvent.isPresent()) {
             return handleExistingEvent(existingEvent.get(), payloadHash, responseType, replayTransformer);
         }
@@ -89,7 +98,7 @@ public class ReliabilityEngine {
             // Execute business mutation and event recording inside an atomic transaction
             R result = transactionTemplate.execute(status -> {
                 // Double-check inside transaction boundary
-                Optional<ProcessedEvent> inTxExisting = processedEventRepository.findByIdempotencyKey(idempotencyKey);
+                Optional<ProcessedEvent> inTxExisting = processedEventRepository.findByTenantIdAndIdempotencyKey(effectiveTenant, idempotencyKey);
                 if (inTxExisting.isPresent()) {
                     return handleExistingEvent(inTxExisting.get(), payloadHash, responseType, replayTransformer);
                 }
@@ -105,6 +114,7 @@ public class ReliabilityEngine {
                 }
 
                 ProcessedEvent event = new ProcessedEvent(
+                        effectiveTenant,
                         idempotencyKey,
                         eventType,
                         resourceId,
@@ -116,11 +126,14 @@ public class ReliabilityEngine {
                 event.setRequestPayload(rawPayloadJson);
                 event.setRetryCount(0);
                 event.setMaxRetries(retryProperties.getMaxAttempts());
-                event.setLastAttemptAt(OffsetDateTime.now());
+                OffsetDateTime now = OffsetDateTime.now();
+                event.setLastAttemptAt(now);
+                event.setExpiresAt(now.plusDays(enhancementProperties.getRetention().getIdempotencyDays()));
                 processedEventRepository.saveAndFlush(event);
 
                 // Persist outbox record atomically in the same database transaction
                 outboxService.recordOutboxEvent(
+                        effectiveTenant,
                         idempotencyKey,
                         eventType,
                         resourceId,
@@ -133,45 +146,74 @@ public class ReliabilityEngine {
             metricsService.recordEventSuccess(eventType, Duration.between(startTime, Instant.now()));
             return result;
         } catch (TransientProcessingException ex) {
-            log.warn("Transient processing failure [event_type={}, idempotency_key={}, resource_id={}]: {}",
-                    eventType, idempotencyKey, resourceId, ex.getMessage());
+            log.warn("Transient processing failure [tenant={}, event_type={}, idempotency_key={}, resource_id={}]: {}",
+                    effectiveTenant, eventType, idempotencyKey, resourceId, ex.getMessage());
             metricsService.recordEventFailure(eventType, "TRANSIENT_FAILURE", Duration.between(startTime, Instant.now()));
-            return recordTransientFailure(idempotencyKey, eventType, resourceId, payloadHash, rawPayloadJson, ex);
+            return recordTransientFailure(effectiveTenant, idempotencyKey, eventType, resourceId, payloadHash, rawPayloadJson, responseType, ex);
+        } catch (com.eventprocessor.reliable_event_processor.exception.AmbiguousExternalOutcomeException ex) {
+            log.warn("Ambiguous external outcome [tenant={}, event_type={}, idempotency_key={}, resource_id={}]: {}",
+                    effectiveTenant, eventType, idempotencyKey, resourceId, ex.getMessage());
+            metricsService.recordEventFailure(eventType, "AMBIGUOUS_EXTERNAL_OUTCOME", Duration.between(startTime, Instant.now()));
+            return recordAmbiguousFailure(effectiveTenant, idempotencyKey, eventType, resourceId, payloadHash, rawPayloadJson, responseType, ex);
         } catch (InsufficientInventoryException ex) {
-            log.warn("Permanent failure - Insufficient inventory [event_type={}, idempotency_key={}, resource_id={}]: {}",
-                    eventType, idempotencyKey, resourceId, ex.getMessage());
+            log.warn("Permanent failure - Insufficient inventory [tenant={}, event_type={}, idempotency_key={}, resource_id={}]: {}",
+                    effectiveTenant, eventType, idempotencyKey, resourceId, ex.getMessage());
             metricsService.recordEventFailure(eventType, "INSUFFICIENT_INVENTORY", Duration.between(startTime, Instant.now()));
             throw ex;
         } catch (ResourceNotFoundException ex) {
-            log.warn("Permanent failure - Resource not found [event_type={}, idempotency_key={}, resource_id={}]: {}",
-                    eventType, idempotencyKey, resourceId, ex.getMessage());
+            log.warn("Permanent failure - Resource not found [tenant={}, event_type={}, idempotency_key={}, resource_id={}]: {}",
+                    effectiveTenant, eventType, idempotencyKey, resourceId, ex.getMessage());
             metricsService.recordEventFailure(eventType, "RESOURCE_NOT_FOUND", Duration.between(startTime, Instant.now()));
             throw ex;
         } catch (DataIntegrityViolationException ex) {
-            // Handled concurrency race: another thread committed the same idempotencyKey concurrently
-            log.info("Detected concurrent duplicate submission [event_type={}, idempotency_key={}]: {}",
-                    eventType, idempotencyKey, ex.getMessage());
+            // Handled concurrency race: another thread committed the same (tenant_id, idempotency_key) concurrently
+            log.info("Detected concurrent duplicate submission [tenant={}, event_type={}, idempotency_key={}]: {}",
+                    effectiveTenant, eventType, idempotencyKey, ex.getMessage());
             metricsService.recordEventDuplicate(eventType, "CONCURRENT_DUPLICATE");
-            ProcessedEvent winnerEvent = processedEventRepository.findByIdempotencyKey(idempotencyKey)
+            ProcessedEvent winnerEvent = processedEventRepository.findByTenantIdAndIdempotencyKey(effectiveTenant, idempotencyKey)
                     .orElseThrow(() -> ex);
             return handleExistingEvent(winnerEvent, payloadHash, responseType, replayTransformer);
         } catch (Exception ex) {
-            log.error("Unhandled processing error [event_type={}, idempotency_key={}, resource_id={}]: {}",
-                    eventType, idempotencyKey, resourceId, ex.getMessage(), ex);
+            log.error("Unhandled processing error [tenant={}, event_type={}, idempotency_key={}, resource_id={}]: {}",
+                    effectiveTenant, eventType, idempotencyKey, resourceId, ex.getMessage(), ex);
             metricsService.recordEventFailure(eventType, "UNEXPECTED_ERROR", Duration.between(startTime, Instant.now()));
             throw ex;
         }
     }
 
+    public <R> R executeIdempotent(
+            String idempotencyKey,
+            String eventType,
+            String resourceId,
+            String payloadToHash,
+            String rawPayloadJson,
+            Class<R> responseType,
+            Supplier<R> businessOperation,
+            UnaryOperator<R> replayTransformer
+    ) {
+        return executeIdempotent(
+                com.eventprocessor.reliable_event_processor.security.TenantContext.getTenantId(),
+                idempotencyKey,
+                eventType,
+                resourceId,
+                payloadToHash,
+                rawPayloadJson,
+                responseType,
+                businessOperation,
+                replayTransformer
+        );
+    }
+
     @SuppressWarnings("unchecked")
-    private <R> R recordTransientFailure(String idempotencyKey, String eventType, String resourceId,
-                                         String payloadHash, String rawPayloadJson, Exception ex) {
+    private <R> R recordTransientFailure(String tenantId, String idempotencyKey, String eventType, String resourceId,
+                                         String payloadHash, String rawPayloadJson, Class<R> responseType, Exception ex) {
         return transactionTemplate.execute(status -> {
             OffsetDateTime now = OffsetDateTime.now();
             Duration backoff = retryProperties.calculateBackoff(1);
             OffsetDateTime nextRetry = now.plus(backoff);
 
             ProcessedEvent event = new ProcessedEvent();
+            event.setTenantId(tenantId);
             event.setIdempotencyKey(idempotencyKey);
             event.setEventType(eventType);
             event.setResourceId(resourceId);
@@ -185,6 +227,23 @@ public class ReliabilityEngine {
             event.setLastAttemptAt(now);
             event.setUpdatedAt(now);
             processedEventRepository.saveAndFlush(event);
+
+            if (responseType != null && OperationResponse.class.isAssignableFrom(responseType)) {
+                OperationResponse opResponse = new OperationResponse(
+                        idempotencyKey,
+                        eventType,
+                        resourceId,
+                        tenantId,
+                        EventStatus.RETRY_PENDING.name(),
+                        false,
+                        null,
+                        now.toInstant(),
+                        1,
+                        nextRetry,
+                        "Operation accepted; transient failure encountered and scheduled for retry: " + ex.getMessage()
+                );
+                return (R) opResponse;
+            }
 
             EventResponse response = new EventResponse(
                     idempotencyKey,
@@ -204,6 +263,63 @@ public class ReliabilityEngine {
     }
 
     @SuppressWarnings("unchecked")
+    private <R> R recordAmbiguousFailure(String tenantId, String idempotencyKey, String eventType, String resourceId,
+                                         String payloadHash, String rawPayloadJson, Class<R> responseType,
+                                         com.eventprocessor.reliable_event_processor.exception.AmbiguousExternalOutcomeException ex) {
+        return transactionTemplate.execute(status -> {
+            OffsetDateTime now = OffsetDateTime.now();
+
+            ProcessedEvent event = new ProcessedEvent();
+            event.setTenantId(tenantId);
+            event.setIdempotencyKey(idempotencyKey);
+            event.setEventType(eventType);
+            event.setResourceId(resourceId);
+            event.setRequestPayloadHash(payloadHash);
+            event.setRequestPayload(rawPayloadJson);
+            event.setStatus(EventStatus.RECONCILIATION_REQUIRED.name());
+            event.setRetryCount(1);
+            event.setMaxRetries(retryProperties.getMaxAttempts());
+            event.setLastFailureReason(ex.getMessage());
+            event.setNextRetryAt(null); // PROHIBIT automatic blind retries
+            event.setLastAttemptAt(now);
+            event.setUpdatedAt(now);
+            processedEventRepository.saveAndFlush(event);
+
+            if (responseType != null && OperationResponse.class.isAssignableFrom(responseType)) {
+                OperationResponse opResponse = new OperationResponse(
+                        idempotencyKey,
+                        eventType,
+                        resourceId,
+                        tenantId,
+                        EventStatus.RECONCILIATION_REQUIRED.name(),
+                        false,
+                        null,
+                        now.toInstant(),
+                        1,
+                        null,
+                        "Ambiguous external outcome encountered; automatic retry suspended. Reconciliation required: " + ex.getMessage()
+                );
+                return (R) opResponse;
+            }
+
+            EventResponse response = new EventResponse(
+                    idempotencyKey,
+                    eventType,
+                    resourceId,
+                    null,
+                    null,
+                    EventStatus.RECONCILIATION_REQUIRED.name(),
+                    false,
+                    now.toInstant(),
+                    1,
+                    null,
+                    "Ambiguous external outcome encountered; reconciliation required: " + ex.getMessage()
+            );
+            return (R) response;
+        });
+    }
+
+    @SuppressWarnings("unchecked")
     private <R> R handleExistingEvent(ProcessedEvent event,
                                       String currentPayloadHash,
                                       Class<R> responseType,
@@ -217,16 +333,28 @@ public class ReliabilityEngine {
             );
         }
 
+        // Expired key check: reject reuse without executing the business operation again
+        if (event.isArchived() || (event.getExpiresAt() != null && event.getExpiresAt().isBefore(OffsetDateTime.now()))) {
+            metricsService.recordEventFailure(event.getEventType(), "IDEMPOTENCY_EXPIRED", null);
+            throw new com.eventprocessor.reliable_event_processor.exception.IdempotencyExpiredException(
+                    "Idempotency key '%s' has expired. The original business operation completed and cannot be re-executed."
+                            .formatted(event.getIdempotencyKey())
+            );
+        }
+
         // Record duplicate/idempotent replay — DOES NOT increment success counter!
         metricsService.recordEventDuplicate(event.getEventType(), event.getStatus());
 
         // Case B: Same key, same payload -> Check status
-        if (EventStatus.PROCESSED.name().equals(event.getStatus())) {
-            try {
-                R cachedResponse = objectMapper.readValue(event.getResponsePayload(), responseType);
-                return replayTransformer != null ? replayTransformer.apply(cachedResponse) : cachedResponse;
-            } catch (JsonProcessingException e) {
-                throw new IllegalStateException("Failed to deserialize cached response payload", e);
+        if (EventStatus.PROCESSED.name().equals(event.getStatus())
+                || EventStatus.RECONCILED_SUCCESS.name().equals(event.getStatus())) {
+            if (event.getResponsePayload() != null && !event.getResponsePayload().isBlank()) {
+                try {
+                    R cachedResponse = objectMapper.readValue(event.getResponsePayload(), responseType);
+                    return replayTransformer != null ? replayTransformer.apply(cachedResponse) : cachedResponse;
+                } catch (JsonProcessingException e) {
+                    throw new IllegalStateException("Failed to deserialize cached response payload", e);
+                }
             }
         }
 
@@ -238,6 +366,23 @@ public class ReliabilityEngine {
         String message = EventStatus.DEAD_LETTER.name().equals(event.getStatus())
                 ? "Event in DEAD_LETTER queue: " + event.getLastFailureReason()
                 : "Event processing is currently " + event.getStatus() + "; automatic retry scheduled.";
+
+        if (responseType != null && OperationResponse.class.isAssignableFrom(responseType)) {
+            OperationResponse opReplay = new OperationResponse(
+                    event.getIdempotencyKey(),
+                    event.getEventType(),
+                    event.getResourceId(),
+                    event.getTenantId(),
+                    event.getStatus(),
+                    true, // idempotent replay
+                    null,
+                    processedInstant,
+                    event.getRetryCount(),
+                    event.getNextRetryAt(),
+                    message
+            );
+            return (R) opReplay;
+        }
 
         EventResponse replayPending = new EventResponse(
                 event.getIdempotencyKey(),

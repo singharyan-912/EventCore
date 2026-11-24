@@ -10,12 +10,21 @@ import { AuditLogsPage } from './pages/AuditLogsPage'
 import { UsersPage } from './pages/UsersPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { LoginPage } from './pages/LoginPage'
+import { RegisterPage } from './pages/RegisterPage'
+import { ApiKeysPage } from './pages/ApiKeysPage'
+import { IntegrationsPage } from './pages/IntegrationsPage'
+import { WebhooksPage } from './pages/WebhooksPage'
+import { ReconciliationPage } from './pages/ReconciliationPage'
 import { ProtectedRoute } from './components/auth/ProtectedRoute'
 
 export const router = createBrowserRouter([
   {
     path: '/login',
     element: <LoginPage />,
+  },
+  {
+    path: '/register',
+    element: <RegisterPage />,
   },
   {
     path: '/',
@@ -36,6 +45,10 @@ export const router = createBrowserRouter([
       {
         path: 'dead-letters',
         element: <DeadLetterPage />,
+      },
+      {
+        path: 'reconciliations',
+        element: <ReconciliationPage />,
       },
       {
         path: 'outbox',
@@ -60,6 +73,18 @@ export const router = createBrowserRouter([
             <UsersPage />
           </ProtectedRoute>
         ),
+      },
+      {
+        path: 'api-keys',
+        element: <ApiKeysPage />,
+      },
+      {
+        path: 'integrations',
+        element: <IntegrationsPage />,
+      },
+      {
+        path: 'webhooks',
+        element: <WebhooksPage />,
       },
       {
         path: 'settings',

@@ -11,6 +11,9 @@ public class AppUser {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Column(name = "tenant_id", nullable = false, length = 50)
+    private String tenantId = "DEFAULT_BUSINESS";
+
     @Column(name = "username", nullable = false, unique = true, length = 50)
     private String username;
 
@@ -37,13 +40,18 @@ public class AppUser {
     public AppUser() {
     }
 
-    public AppUser(String username, String email, String passwordHash, Role role, UserStatus status) {
+    public AppUser(String tenantId, String username, String email, String passwordHash, Role role, UserStatus status) {
+        this.tenantId = (tenantId != null && !tenantId.isBlank()) ? tenantId : "DEFAULT_BUSINESS";
         this.username = username;
         this.email = email;
         this.passwordHash = passwordHash;
         this.role = role;
         this.status = status != null ? status : UserStatus.ACTIVE;
         this.updatedAt = OffsetDateTime.now();
+    }
+
+    public AppUser(String username, String email, String passwordHash, Role role, UserStatus status) {
+        this("DEFAULT_BUSINESS", username, email, passwordHash, role, status);
     }
 
     @PrePersist
@@ -61,6 +69,14 @@ public class AppUser {
 
     public Long getId() {
         return id;
+    }
+
+    public String getTenantId() {
+        return tenantId;
+    }
+
+    public void setTenantId(String tenantId) {
+        this.tenantId = tenantId;
     }
 
     public String getUsername() {

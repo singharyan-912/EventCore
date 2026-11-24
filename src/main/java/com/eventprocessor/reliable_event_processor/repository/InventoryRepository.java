@@ -15,7 +15,13 @@ public interface InventoryRepository extends JpaRepository<Inventory, Long> {
 
     Optional<Inventory> findByResourceId(String resourceId);
 
+    Optional<Inventory> findByTenantIdAndResourceId(String tenantId, String resourceId);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT i FROM Inventory i WHERE i.resourceId = :resourceId")
     Optional<Inventory> findByResourceIdForUpdate(@Param("resourceId") String resourceId);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT i FROM Inventory i WHERE i.tenantId = :tenantId AND i.resourceId = :resourceId")
+    Optional<Inventory> findByTenantIdAndResourceIdForUpdate(@Param("tenantId") String tenantId, @Param("resourceId") String resourceId);
 }

@@ -76,4 +76,35 @@ public class RetryWorker {
     public List<ProcessedEvent> fetchEligibleBatch() {
         return processedEventRepository.findEligibleForRetryWithLock(workerProperties.getBatchSize());
     }
+
+    /**
+     * Periodically recovers operations stuck in PROCESSING whose worker lease has expired.
+     */
+    @Scheduled(fixedDelayString = "${event-processor.worker.recovery-interval-ms:10000}")
+    public void recoverStuckProcessingEvents() {
+        if (!workerProperties.isEnabled()) {
+            return;
+        }
+
+        List<ProcessedEvent> stuck = fetchStuckProcessingBatch();
+        if (stuck.isEmpty()) {
+            return;
+        }
+
+        log.warn("RetryWorker: found {} stuck PROCESSING event(s) for lease recovery", stuck.size());
+
+        for (ProcessedEvent event : stuck) {
+            try {
+                retryExecutionService.recoverStuckEvent(event);
+            } catch (Exception ex) {
+                log.error("RetryWorker: unexpected error recovering stuck event {}: {}",
+                        event.getIdempotencyKey(), ex.getMessage(), ex);
+            }
+        }
+    }
+
+    @Transactional
+    public List<ProcessedEvent> fetchStuckProcessingBatch() {
+        return processedEventRepository.findStuckProcessingWithLock(java.time.OffsetDateTime.now(), workerProperties.getBatchSize());
+    }
 }

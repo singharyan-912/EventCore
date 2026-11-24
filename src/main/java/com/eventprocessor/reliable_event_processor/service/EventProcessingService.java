@@ -2,7 +2,9 @@ package com.eventprocessor.reliable_event_processor.service;
 
 import com.eventprocessor.reliable_event_processor.dto.EventRequest;
 import com.eventprocessor.reliable_event_processor.dto.EventResponse;
-import com.eventprocessor.reliable_event_processor.entity.Inventory;
+import com.eventprocessor.reliable_event_processor.exception.UnauthorizedException;
+import com.eventprocessor.reliable_event_processor.handler.InventoryDeductHandler;
+import com.eventprocessor.reliable_event_processor.security.TenantContext;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
@@ -13,21 +15,46 @@ import java.time.Instant;
 public class EventProcessingService {
 
     private final ReliabilityEngine reliabilityEngine;
-    private final InventoryService inventoryService;
+    private final InventoryDeductHandler inventoryDeductHandler;
     private final ObjectMapper objectMapper;
-    private final TransientFailureSimulator failureSimulator;
+    private final TenantService tenantService;
 
     public EventProcessingService(ReliabilityEngine reliabilityEngine,
-                                  InventoryService inventoryService,
+                                  InventoryDeductHandler inventoryDeductHandler,
                                   ObjectMapper objectMapper,
-                                  TransientFailureSimulator failureSimulator) {
+                                  TenantService tenantService) {
         this.reliabilityEngine = reliabilityEngine;
-        this.inventoryService = inventoryService;
+        this.inventoryDeductHandler = inventoryDeductHandler;
         this.objectMapper = objectMapper;
-        this.failureSimulator = failureSimulator;
+        this.tenantService = tenantService;
     }
 
     public EventResponse processEvent(EventRequest request) {
+        String effectiveTenant;
+        if (TenantContext.isPlatformAdminBypass()) {
+            effectiveTenant = (request.tenantId() != null && !request.tenantId().isBlank())
+                    ? request.tenantId().trim()
+                    : TenantContext.getTenantId();
+        } else if (TenantContext.getExplicitTenantId() != null) {
+            effectiveTenant = TenantContext.getTenantId();
+            if (request.tenantId() != null && !request.tenantId().isBlank()
+                    && !request.tenantId().trim().equalsIgnoreCase(effectiveTenant)) {
+                throw new UnauthorizedException(
+                        "Client-supplied tenantId '%s' conflicts with authenticated/verified server-side tenant '%s'"
+                                .formatted(request.tenantId(), effectiveTenant));
+            }
+        } else {
+            if (request.tenantId() != null && !request.tenantId().isBlank()) {
+                String candidate = request.tenantId().trim();
+                if (!tenantService.isTenantActive(candidate)) {
+                    throw new IllegalArgumentException("Invalid or inactive tenant: " + candidate);
+                }
+                effectiveTenant = candidate;
+            } else {
+                effectiveTenant = TenantContext.getTenantId();
+            }
+        }
+
         String canonicalPayload = "eventType=%s|resourceId=%s|quantity=%d"
                 .formatted(request.eventType(), request.resourceId(), request.quantity());
 
@@ -39,6 +66,7 @@ public class EventProcessingService {
         }
 
         return reliabilityEngine.executeIdempotent(
+                effectiveTenant,
                 request.idempotencyKey(),
                 request.eventType(),
                 request.resourceId(),
@@ -46,17 +74,15 @@ public class EventProcessingService {
                 rawPayloadJson,
                 EventResponse.class,
                 () -> {
-                    // Check if isolated test failure simulation is active
-                    failureSimulator.maybeSimulateTransientFailure(request.idempotencyKey(), request.resourceId(), 2);
-
-                    // Business action: deduct inventory with pessimistic row lock
-                    Inventory updated = inventoryService.deductInventory(request.resourceId(), request.quantity());
+                    // Business action: executed via InventoryDeductHandler inside transaction
+                    InventoryDeductHandler.InventoryDeductResult result = inventoryDeductHandler.execute(
+                            effectiveTenant, request.idempotencyKey(), request.resourceId(), objectMapper.valueToTree(request));
                     return new EventResponse(
                             request.idempotencyKey(),
                             request.eventType(),
                             request.resourceId(),
-                            request.quantity(),
-                            updated.getAvailableQuantity(),
+                            result.deductedQuantity(),
+                            result.remainingQuantity(),
                             "PROCESSED",
                             false,
                             Instant.now()

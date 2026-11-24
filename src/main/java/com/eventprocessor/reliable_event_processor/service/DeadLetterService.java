@@ -10,6 +10,7 @@ import com.eventprocessor.reliable_event_processor.exception.InvalidStateTransit
 import com.eventprocessor.reliable_event_processor.exception.ResourceNotFoundException;
 import com.eventprocessor.reliable_event_processor.exception.UnauthorizedException;
 import com.eventprocessor.reliable_event_processor.repository.ProcessedEventRepository;
+import com.eventprocessor.reliable_event_processor.security.TenantContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
@@ -51,17 +52,34 @@ public class DeadLetterService {
 
     @Transactional(readOnly = true)
     public PageResponse<DeadLetterResponse> listDeadLetterEvents(int page, int size) {
-        Page<ProcessedEvent> events = processedEventRepository.findByStatus(
-                EventStatus.DEAD_LETTER.name(),
-                PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "updatedAt"))
-        );
+        Page<ProcessedEvent> events;
+        if (TenantContext.isPlatformAdminBypass()) {
+            events = processedEventRepository.findByStatus(
+                    EventStatus.DEAD_LETTER.name(),
+                    PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "updatedAt"))
+            );
+        } else {
+            String tenantId = TenantContext.getTenantId();
+            events = processedEventRepository.findByTenantIdAndStatus(
+                    tenantId,
+                    EventStatus.DEAD_LETTER.name(),
+                    PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "updatedAt"))
+            );
+        }
         return PageResponse.from(events.map(this::toDeadLetterResponse));
     }
 
     @Transactional(readOnly = true)
     public DeadLetterResponse getDeadLetterEvent(String idempotencyKey) {
-        ProcessedEvent event = processedEventRepository.findByIdempotencyKey(idempotencyKey)
-                .orElseThrow(() -> new ResourceNotFoundException("Event not found: " + idempotencyKey));
+        ProcessedEvent event;
+        if (TenantContext.isPlatformAdminBypass()) {
+            event = processedEventRepository.findByIdempotencyKey(idempotencyKey)
+                    .orElseThrow(() -> new ResourceNotFoundException("Event not found: " + idempotencyKey));
+        } else {
+            String tenantId = TenantContext.getTenantId();
+            event = processedEventRepository.findByTenantIdAndIdempotencyKey(tenantId, idempotencyKey)
+                    .orElseThrow(() -> new ResourceNotFoundException("Event not found: " + idempotencyKey));
+        }
 
         if (!EventStatus.DEAD_LETTER.name().equals(event.getStatus())) {
             throw new InvalidStateTransitionException(
@@ -90,16 +108,24 @@ public class DeadLetterService {
     @Transactional
     public DeadLetterResponse requestReprocessing(String idempotencyKey, String principal) {
         try {
-            ProcessedEvent event = processedEventRepository
-                    .findByIdempotencyKeyForUpdate(idempotencyKey)
-                    .orElseThrow(() -> new ResourceNotFoundException("Event not found: " + idempotencyKey));
+            ProcessedEvent event;
+            if (TenantContext.isPlatformAdminBypass()) {
+                event = processedEventRepository
+                        .findByIdempotencyKeyForUpdate(idempotencyKey)
+                        .orElseThrow(() -> new ResourceNotFoundException("Event not found: " + idempotencyKey));
+            } else {
+                String tenantId = TenantContext.getTenantId();
+                event = processedEventRepository
+                        .findByTenantIdAndIdempotencyKeyForUpdate(tenantId, idempotencyKey)
+                        .orElseThrow(() -> new ResourceNotFoundException("Event not found: " + idempotencyKey));
+            }
 
             if (!EventStatus.DEAD_LETTER.name().equals(event.getStatus())) {
                 throw new InvalidStateTransitionException(
                         "Only DEAD_LETTER events can be reprocessed. Current status: " + event.getStatus());
             }
 
-            // Reset for one more attempt cycle — preserve original idempotency key and payload
+            // Reset for one more attempt cycle — preserve original idempotency key, tenantId, and payload
             event.setStatus(EventStatus.RETRY_PENDING.name());
             event.setRetryCount(0);
             event.setMaxRetries(retryProperties.getMaxAttempts());
@@ -108,6 +134,7 @@ public class DeadLetterService {
             processedEventRepository.save(event);
 
             auditService.recordAuditLog(
+                    event.getTenantId(),
                     "DEAD_LETTER_REPROCESS",
                     idempotencyKey,
                     "SUCCESS",
@@ -116,10 +143,13 @@ public class DeadLetterService {
                     "Event reset to RETRY_PENDING with immediate schedule"
             );
 
-            log.info("Event {} manually queued for reprocessing from DEAD_LETTER by principal '{}'", idempotencyKey, principal);
+            log.info("Event {} (tenant: {}) manually queued for reprocessing from DEAD_LETTER by principal '{}'",
+                    idempotencyKey, event.getTenantId(), principal);
             return toDeadLetterResponse(event);
         } catch (Exception ex) {
+            String tenantId = TenantContext.getTenantId();
             auditService.recordAuditLog(
+                    tenantId,
                     "DEAD_LETTER_REPROCESS",
                     idempotencyKey,
                     "FAILED",

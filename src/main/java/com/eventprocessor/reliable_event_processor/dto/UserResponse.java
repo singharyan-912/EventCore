@@ -9,7 +9,11 @@ public record UserResponse(
         String role,
         String status,
         OffsetDateTime createdAt,
-        OffsetDateTime updatedAt
+        OffsetDateTime updatedAt,
+        String tenantId
 ) {
+    public UserResponse(Long id, String username, String email, String role, String status, OffsetDateTime createdAt, OffsetDateTime updatedAt) {
+        this(id, username, email, role, status, createdAt, updatedAt, "DEFAULT_BUSINESS");
+    }
 }
 

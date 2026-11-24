@@ -23,7 +23,12 @@ public record CreateUserRequest(
         String password,
 
         @NotNull(message = "Role is required")
-        Role role
+        Role role,
+
+        String tenantId
 ) {
+    public CreateUserRequest(String username, String email, String password, Role role) {
+        this(username, email, password, role, "DEFAULT_BUSINESS");
+    }
 }
 

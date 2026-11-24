@@ -11,5 +11,10 @@ public record KafkaEventMessage(
     String resourceId,
     String idempotencyKey,
     String payload,
-    Instant timestamp
-) {}
+    Instant timestamp,
+    String tenantId
+) {
+    public KafkaEventMessage(String eventId, String eventType, String resourceId, String idempotencyKey, String payload, Instant timestamp) {
+        this(eventId, eventType, resourceId, idempotencyKey, payload, timestamp, "DEFAULT_BUSINESS");
+    }
+}

@@ -123,10 +123,15 @@ public class EventKafkaConsumer {
             resourceId = record.key() != null ? record.key() : "default-resource";
         }
 
+        String tenantId = extractText(jsonNode, "tenantId");
+        if (tenantId == null || tenantId.isBlank()) {
+            tenantId = "DEFAULT_BUSINESS";
+        }
+
         int quantity = extractQuantity(jsonNode);
 
-        // 2. Query PostgreSQL to verify existing state (Authoritative Source of Truth)
-        Optional<ProcessedEvent> existingOpt = processedEventRepository.findByIdempotencyKey(idempotencyKey);
+        // 2. Query PostgreSQL to verify existing state for this tenant (Authoritative Source of Truth)
+        Optional<ProcessedEvent> existingOpt = processedEventRepository.findByTenantIdAndIdempotencyKey(tenantId, idempotencyKey);
         if (existingOpt.isPresent()) {
             ProcessedEvent existing = existingOpt.get();
             String status = existing.getStatus();
@@ -134,29 +139,30 @@ public class EventKafkaConsumer {
             metricsService.recordConsumerDuplicate(topic);
 
             if (EventStatus.PROCESSED.name().equals(status)) {
-                log.info("Duplicate delivery for event [idempotency_key={}, status=PROCESSED]. Acknowledged without repeating business effects.",
-                        idempotencyKey);
+                log.info("Duplicate delivery for event [tenant={}, idempotency_key={}, status=PROCESSED]. Acknowledged without repeating business effects.",
+                        tenantId, idempotencyKey);
                 ack.acknowledge();
                 return;
             } else if (EventStatus.DEAD_LETTER.name().equals(status)) {
-                log.warn("Event [idempotency_key={}, status=DEAD_LETTER, reason={}]. Acknowledged without repeating business effects.",
-                        idempotencyKey, existing.getLastFailureReason());
+                log.warn("Event [tenant={}, idempotency_key={}, status=DEAD_LETTER, reason={}]. Acknowledged without repeating business effects.",
+                        tenantId, idempotencyKey, existing.getLastFailureReason());
                 ack.acknowledge();
                 return;
             } else if (EventStatus.RETRY_PENDING.name().equals(status)) {
-                log.info("Event [idempotency_key={}, status=RETRY_PENDING, attempts={}/{}]. Acknowledged; scheduled retry worker is authoritative.",
-                        idempotencyKey, existing.getRetryCount(), existing.getMaxRetries());
+                log.info("Event [tenant={}, idempotency_key={}, status=RETRY_PENDING, attempts={}/{}]. Acknowledged; scheduled retry worker is authoritative.",
+                        tenantId, idempotencyKey, existing.getRetryCount(), existing.getMaxRetries());
                 ack.acknowledge();
                 return;
             } else if (EventStatus.PROCESSING.name().equals(status)) {
-                log.info("Event [idempotency_key={}, status=PROCESSING]. Acknowledged.", idempotencyKey);
+                log.info("Event [tenant={}, idempotency_key={}, status=PROCESSING]. Acknowledged.", tenantId, idempotencyKey);
                 ack.acknowledge();
                 return;
             }
         }
 
-        // 3. Invoke existing business processing engine
-        EventRequest eventRequest = new EventRequest(idempotencyKey, eventType, resourceId, quantity);
+        // 3. Invoke existing business processing engine with tenant context
+        EventRequest eventRequest = new EventRequest(idempotencyKey, eventType, resourceId, quantity, tenantId);
+        com.eventprocessor.reliable_event_processor.security.TenantContext.setTenantId(tenantId);
         try {
             EventResponse response = eventProcessingService.processEvent(eventRequest);
             metricsService.recordConsumerSuccess(topic);
@@ -187,6 +193,8 @@ public class EventKafkaConsumer {
                     idempotencyKey, topic, partition, offset, ex.getMessage(), ex);
             metricsService.recordConsumerFailure(topic, "INFRASTRUCTURE_FAILURE");
             throw ex; // Triggers container retry until database/infrastructure recovers
+        } finally {
+            com.eventprocessor.reliable_event_processor.security.TenantContext.clear();
         }
     }
 

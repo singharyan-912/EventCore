@@ -2,6 +2,7 @@ package com.eventprocessor.reliable_event_processor.service;
 
 import com.eventprocessor.reliable_event_processor.entity.OperationalAuditLog;
 import com.eventprocessor.reliable_event_processor.repository.OperationalAuditLogRepository;
+import com.eventprocessor.reliable_event_processor.security.TenantContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
@@ -35,7 +36,19 @@ public class OperationalAuditService {
                                              String failureReason,
                                              String principal,
                                              String details) {
+        return recordAuditLog(TenantContext.getTenantId(), actionType, targetIdentifier, outcome, failureReason, principal, details);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public OperationalAuditLog recordAuditLog(String tenantId,
+                                             String actionType,
+                                             String targetIdentifier,
+                                             String outcome,
+                                             String failureReason,
+                                             String principal,
+                                             String details) {
         OperationalAuditLog auditLog = new OperationalAuditLog(
+                (tenantId != null && !tenantId.isBlank()) ? tenantId : TenantContext.getTenantId(),
                 actionType,
                 targetIdentifier,
                 outcome,
@@ -44,8 +57,8 @@ public class OperationalAuditService {
                 details
         );
         OperationalAuditLog saved = auditLogRepository.save(auditLog);
-        log.info("Operational audit recorded [id={}, action={}, target={}, outcome={}, principal={}]",
-                saved.getId(), actionType, targetIdentifier, outcome, auditLog.getPrincipal());
+        log.info("Operational audit recorded [id={}, tenant={}, action={}, target={}, outcome={}, principal={}]",
+                saved.getId(), saved.getTenantId(), actionType, targetIdentifier, outcome, auditLog.getPrincipal());
         return saved;
     }
 
@@ -61,6 +74,10 @@ public class OperationalAuditService {
 
         Specification<OperationalAuditLog> spec = (root, query, cb) -> {
             var predicates = cb.conjunction();
+            if (!TenantContext.isPlatformAdminBypass()) {
+                String tenantId = TenantContext.getTenantId();
+                predicates = cb.and(predicates, cb.equal(root.get("tenantId"), tenantId));
+            }
             if (actionType != null && !actionType.isBlank()) {
                 predicates = cb.and(predicates, cb.equal(root.get("actionType"), actionType.trim()));
             }

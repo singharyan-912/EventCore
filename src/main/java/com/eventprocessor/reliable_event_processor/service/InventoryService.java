@@ -17,13 +17,17 @@ public class InventoryService {
     }
 
     /**
-     * Deducts inventory atomically with pessimistic write locking.
+     * Deducts inventory atomically with pessimistic write locking for a specific tenant.
      * Prevents race conditions and guarantees that inventory never becomes negative.
      */
     @Transactional
-    public Inventory deductInventory(String resourceId, int quantity) {
-        Inventory inventory = inventoryRepository.findByResourceIdForUpdate(resourceId)
-                .orElseThrow(() -> new ResourceNotFoundException("Inventory resource not found: " + resourceId));
+    public Inventory deductInventory(String tenantId, String resourceId, int quantity) {
+        String effectiveTenant = (tenantId != null && !tenantId.isBlank())
+                ? tenantId
+                : com.eventprocessor.reliable_event_processor.security.TenantContext.getTenantId();
+
+        Inventory inventory = inventoryRepository.findByTenantIdAndResourceIdForUpdate(effectiveTenant, resourceId)
+                .orElseThrow(() -> new ResourceNotFoundException("Inventory resource not found: " + resourceId + " (tenant: " + effectiveTenant + ")"));
 
         if (inventory.getAvailableQuantity() < quantity) {
             throw new InsufficientInventoryException(
@@ -36,9 +40,23 @@ public class InventoryService {
         return inventoryRepository.save(inventory);
     }
 
+    @Transactional
+    public Inventory deductInventory(String resourceId, int quantity) {
+        return deductInventory(com.eventprocessor.reliable_event_processor.security.TenantContext.getTenantId(), resourceId, quantity);
+    }
+
+    @Transactional(readOnly = true)
+    public Inventory getInventory(String tenantId, String resourceId) {
+        String effectiveTenant = (tenantId != null && !tenantId.isBlank())
+                ? tenantId
+                : com.eventprocessor.reliable_event_processor.security.TenantContext.getTenantId();
+
+        return inventoryRepository.findByTenantIdAndResourceId(effectiveTenant, resourceId)
+                .orElseThrow(() -> new ResourceNotFoundException("Inventory resource not found: " + resourceId + " (tenant: " + effectiveTenant + ")"));
+    }
+
     @Transactional(readOnly = true)
     public Inventory getInventory(String resourceId) {
-        return inventoryRepository.findByResourceId(resourceId)
-                .orElseThrow(() -> new ResourceNotFoundException("Inventory resource not found: " + resourceId));
+        return getInventory(com.eventprocessor.reliable_event_processor.security.TenantContext.getTenantId(), resourceId);
     }
 }

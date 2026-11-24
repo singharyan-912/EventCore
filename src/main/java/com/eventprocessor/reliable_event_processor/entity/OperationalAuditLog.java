@@ -11,6 +11,9 @@ public class OperationalAuditLog {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Column(name = "tenant_id", nullable = false, length = 50)
+    private String tenantId = "DEFAULT_BUSINESS";
+
     @Column(name = "action_type", nullable = false, length = 100)
     private String actionType;
 
@@ -35,8 +38,9 @@ public class OperationalAuditLog {
     public OperationalAuditLog() {
     }
 
-    public OperationalAuditLog(String actionType, String targetIdentifier, String outcome,
+    public OperationalAuditLog(String tenantId, String actionType, String targetIdentifier, String outcome,
                                String failureReason, String principal, String details) {
+        this.tenantId = (tenantId != null && !tenantId.isBlank()) ? tenantId : "DEFAULT_BUSINESS";
         this.actionType = actionType;
         this.targetIdentifier = targetIdentifier;
         this.outcome = outcome;
@@ -45,8 +49,21 @@ public class OperationalAuditLog {
         this.details = details;
     }
 
+    public OperationalAuditLog(String actionType, String targetIdentifier, String outcome,
+                               String failureReason, String principal, String details) {
+        this("DEFAULT_BUSINESS", actionType, targetIdentifier, outcome, failureReason, principal, details);
+    }
+
     public Long getId() {
         return id;
+    }
+
+    public String getTenantId() {
+        return tenantId;
+    }
+
+    public void setTenantId(String tenantId) {
+        this.tenantId = tenantId;
     }
 
     public String getActionType() {

@@ -9,6 +9,10 @@ import {
   ShieldAlert,
   Users,
   Settings,
+  KeyRound,
+  Globe,
+  Webhook,
+  Scale,
 } from 'lucide-react'
 
 export interface NavItem {
@@ -60,6 +64,13 @@ export const navigationConfig: NavSection[] = [
         description: 'Poison event recovery, inspection, and operator reprocessing',
       },
       {
+        id: 'reconciliations',
+        label: 'Reconciliation',
+        path: '/reconciliations',
+        icon: Scale,
+        description: 'Inspect and resolve uncertain external outcomes without blind retries',
+      },
+      {
         id: 'outbox',
         label: 'Outbox Monitor',
         path: '/outbox',
@@ -102,6 +113,27 @@ export const navigationConfig: NavSection[] = [
         badgeVariant: 'error',
         requiredRoles: ['ADMIN'],
         description: 'Console user provisioning, RBAC roles, and status management',
+      },
+      {
+        id: 'api-keys',
+        label: 'API Keys',
+        path: '/api-keys',
+        icon: KeyRound,
+        description: 'Tenant-scoped API key issuance, rotation, and revocation',
+      },
+      {
+        id: 'integrations',
+        label: 'External Integrations',
+        path: '/integrations',
+        icon: Globe,
+        description: 'Register and manage external HTTP adapters for business operation dispatch',
+      },
+      {
+        id: 'webhooks',
+        label: 'Webhooks',
+        path: '/webhooks',
+        icon: Webhook,
+        description: 'HMAC-signed outbound notifications for operation lifecycle events',
       },
       {
         id: 'settings',

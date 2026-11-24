@@ -17,19 +17,31 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, Long> 
 
     Optional<OutboxEvent> findByIdempotencyKey(String idempotencyKey);
 
+    Optional<OutboxEvent> findByTenantIdAndIdempotencyKey(String tenantId, String idempotencyKey);
+
     List<OutboxEvent> findAllByIdempotencyKey(String idempotencyKey);
 
     List<OutboxEvent> findByIdempotencyKeyIn(java.util.Collection<String> idempotencyKeys);
+
+    List<OutboxEvent> findByTenantIdAndIdempotencyKeyIn(String tenantId, java.util.Collection<String> idempotencyKeys);
 
     Page<OutboxEvent> findByStatus(String status, Pageable pageable);
 
     long countByStatus(String status);
 
+    long countByTenantId(String tenantId);
+
     @Query("SELECT o.status, COUNT(o) FROM OutboxEvent o GROUP BY o.status")
     List<Object[]> countGroupedByStatus();
 
+    @Query("SELECT o.status, COUNT(o) FROM OutboxEvent o WHERE o.tenantId = :tenantId GROUP BY o.status")
+    List<Object[]> countGroupedByStatusForTenant(@Param("tenantId") String tenantId);
+
     @Query("SELECT COUNT(o) FROM OutboxEvent o WHERE o.retryCount > 0")
     long countRetriedOutboxEvents();
+
+    @Query("SELECT COUNT(o) FROM OutboxEvent o WHERE o.tenantId = :tenantId AND o.retryCount > 0")
+    long countRetriedOutboxEventsForTenant(@Param("tenantId") String tenantId);
 
     /**
      * Atomically locks and returns pending or stale-claimed outbox events using SKIP LOCKED.
@@ -43,5 +55,14 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, Long> 
                    "FOR UPDATE SKIP LOCKED",
            nativeQuery = true)
     List<OutboxEvent> findEligibleForPublishingWithLock(@Param("limit") int limit,
-                                                       @Param("staleTime") OffsetDateTime staleTime);
+                                                        @Param("staleTime") OffsetDateTime staleTime);
+
+    @Query(value = "SELECT * FROM outbox_events " +
+                   "WHERE status = 'PUBLISHED' AND updated_at <= :cutoff " +
+                   "ORDER BY id ASC " +
+                   "LIMIT :limit " +
+                   "FOR UPDATE SKIP LOCKED",
+           nativeQuery = true)
+    List<OutboxEvent> findEligibleForCleanupWithLock(@Param("cutoff") OffsetDateTime cutoff,
+                                                     @Param("limit") int limit);
 }

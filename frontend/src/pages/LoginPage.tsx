@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { Server, Lock, User, AlertCircle } from 'lucide-react'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/common/Card'
 import { Button } from '../components/common/Button'
@@ -115,6 +115,13 @@ export function LoginPage() {
               <span className="font-semibold text-slate-700 dark:text-slate-300 block">Development Credentials:</span>
               <p>Username: <code className="font-mono text-slate-800 dark:text-slate-200">admin</code></p>
               <p>Password: <code className="font-mono text-slate-800 dark:text-slate-200">AdminSecret123!</code></p>
+            </div>
+
+            <div className="mt-4 pt-4 border-t border-slate-100 dark:border-slate-800 text-center text-xs text-slate-500 dark:text-slate-400">
+              Need a tenant account for your business?{' '}
+              <Link to="/register" className="font-semibold text-indigo-600 hover:text-indigo-500 dark:text-indigo-400">
+                Register a new business
+              </Link>
             </div>
           </CardContent>
         </Card>

@@ -4,14 +4,19 @@ import jakarta.persistence.*;
 import java.time.OffsetDateTime;
 
 @Entity
-@Table(name = "processed_events")
+@Table(name = "processed_events", uniqueConstraints = {
+        @UniqueConstraint(name = "uk_processed_events_tenant_key", columnNames = {"tenant_id", "idempotency_key"})
+})
 public class ProcessedEvent {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "idempotency_key", nullable = false, unique = true, length = 255)
+    @Column(name = "tenant_id", nullable = false, length = 50)
+    private String tenantId = "DEFAULT_BUSINESS";
+
+    @Column(name = "idempotency_key", nullable = false, length = 255)
     private String idempotencyKey;
 
     @Column(name = "event_type", nullable = false, length = 100)
@@ -50,6 +55,27 @@ public class ProcessedEvent {
     @Column(name = "last_attempt_at")
     private OffsetDateTime lastAttemptAt;
 
+    @Column(name = "processing_lease_expires_at")
+    private OffsetDateTime processingLeaseExpiresAt;
+
+    @Column(name = "reconciled_at")
+    private OffsetDateTime reconciledAt;
+
+    @Column(name = "reconciled_by", length = 100)
+    private String reconciledBy;
+
+    @Column(name = "reconciliation_notes", columnDefinition = "TEXT")
+    private String reconciliationNotes;
+
+    @Column(name = "expires_at")
+    private OffsetDateTime expiresAt;
+
+    @Column(name = "archived", nullable = false)
+    private boolean archived = false;
+
+    @Column(name = "archived_at")
+    private OffsetDateTime archivedAt;
+
     @Column(name = "created_at", insertable = false, updatable = false)
     private OffsetDateTime createdAt;
 
@@ -59,9 +85,10 @@ public class ProcessedEvent {
     public ProcessedEvent() {
     }
 
-    public ProcessedEvent(String idempotencyKey, String eventType, String resourceId,
+    public ProcessedEvent(String tenantId, String idempotencyKey, String eventType, String resourceId,
                           String requestPayloadHash, String status,
                           String responsePayload, Integer responseStatusCode) {
+        this.tenantId = (tenantId != null && !tenantId.isBlank()) ? tenantId : "DEFAULT_BUSINESS";
         this.idempotencyKey = idempotencyKey;
         this.eventType = eventType;
         this.resourceId = resourceId;
@@ -74,8 +101,22 @@ public class ProcessedEvent {
         this.updatedAt = OffsetDateTime.now();
     }
 
+    public ProcessedEvent(String idempotencyKey, String eventType, String resourceId,
+                          String requestPayloadHash, String status,
+                          String responsePayload, Integer responseStatusCode) {
+        this("DEFAULT_BUSINESS", idempotencyKey, eventType, resourceId, requestPayloadHash, status, responsePayload, responseStatusCode);
+    }
+
     public Long getId() {
         return id;
+    }
+
+    public String getTenantId() {
+        return tenantId;
+    }
+
+    public void setTenantId(String tenantId) {
+        this.tenantId = tenantId;
     }
 
     public String getIdempotencyKey() {
@@ -200,5 +241,68 @@ public class ProcessedEvent {
 
     public void setUpdatedAt(OffsetDateTime updatedAt) {
         this.updatedAt = updatedAt;
+    }
+
+    public OffsetDateTime getProcessingLeaseExpiresAt() {
+        return processingLeaseExpiresAt;
+    }
+
+    public void setProcessingLeaseExpiresAt(OffsetDateTime processingLeaseExpiresAt) {
+        this.processingLeaseExpiresAt = processingLeaseExpiresAt;
+        this.updatedAt = OffsetDateTime.now();
+    }
+
+    public OffsetDateTime getReconciledAt() {
+        return reconciledAt;
+    }
+
+    public void setReconciledAt(OffsetDateTime reconciledAt) {
+        this.reconciledAt = reconciledAt;
+        this.updatedAt = OffsetDateTime.now();
+    }
+
+    public String getReconciledBy() {
+        return reconciledBy;
+    }
+
+    public void setReconciledBy(String reconciledBy) {
+        this.reconciledBy = reconciledBy;
+        this.updatedAt = OffsetDateTime.now();
+    }
+
+    public String getReconciliationNotes() {
+        return reconciliationNotes;
+    }
+
+    public void setReconciliationNotes(String reconciliationNotes) {
+        this.reconciliationNotes = reconciliationNotes;
+        this.updatedAt = OffsetDateTime.now();
+    }
+
+    public OffsetDateTime getExpiresAt() {
+        return expiresAt;
+    }
+
+    public void setExpiresAt(OffsetDateTime expiresAt) {
+        this.expiresAt = expiresAt;
+        this.updatedAt = OffsetDateTime.now();
+    }
+
+    public boolean isArchived() {
+        return archived;
+    }
+
+    public void setArchived(boolean archived) {
+        this.archived = archived;
+        this.updatedAt = OffsetDateTime.now();
+    }
+
+    public OffsetDateTime getArchivedAt() {
+        return archivedAt;
+    }
+
+    public void setArchivedAt(OffsetDateTime archivedAt) {
+        this.archivedAt = archivedAt;
+        this.updatedAt = OffsetDateTime.now();
     }
 }
